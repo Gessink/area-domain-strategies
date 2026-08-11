@@ -18,7 +18,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.4.1";
+const VERSION = "1.5.0";
 
 /* ================================================================== *
  * Shared core
@@ -265,6 +265,7 @@ const CHIP_KEYS = [
   "domain", "domains", "device_class", "device_classes", "label", "labels",
   "label_match", "entities", "name", "icon", "active_states", "inactive_states",
   "use_action", "state_text", "exclude_keywords", "include_keywords", "key",
+  "device_class_exempt_domains",
 ];
 
 function chipFromConfig(cfg) {
@@ -289,8 +290,14 @@ function matches(hass, cfg, chip, entityId, stateObj, ignoreArea) {
 
   const deviceClasses = asArray(chip.device_classes).concat(asArray(chip.device_class));
   if (deviceClasses.length) {
-    const dc = stateObj.attributes ? stateObj.attributes.device_class : undefined;
-    if (!dc || !deviceClasses.includes(dc)) return false;
+    // Some domains carry no device class at all. A section like security wants
+    // those alongside the classed ones, so they can be exempted rather than
+    // needing a second section.
+    const exempt = asArray(chip.device_class_exempt_domains);
+    if (!exempt.includes(entityId.split(".")[0])) {
+      const dc = stateObj.attributes ? stateObj.attributes.device_class : undefined;
+      if (!dc || !deviceClasses.includes(dc)) return false;
+    }
   }
 
   if (!ignoreArea) {
@@ -1255,6 +1262,225 @@ const CHIP_STYLES = `
 
 customElements.define("area-domain-tab-chips", AreaDomainTabChips);
 
+
+/* ================================================================== *
+ * The shortcut button
+ *
+ * Home Assistant's own button card has no colour option, and the tile card
+ * only colours itself while its entity is active, which a "turn everything
+ * off" button never is. So the shortcuts get their own small card.
+ * ================================================================== */
+
+// Theme colours light enough that white text on them is unreadable.
+const DARK_TEXT_COLORS = [
+  "amber", "yellow", "lime", "light-green", "white", "light-grey", "orange",
+];
+
+function buttonColors(color, fill, textColor) {
+  const base = color ? resolveColor(color) : "var(--primary-color)";
+  if (!fill) {
+    return { bg: `color-mix(in srgb, ${base} 20%, transparent)`, fg: base };
+  }
+  let fg = textColor;
+  if (!fg) {
+    fg = DARK_TEXT_COLORS.includes(color) ? "rgba(0, 0, 0, 0.87)" : "#fff";
+  } else if (THEME_COLORS.includes(fg)) {
+    fg = `var(--${fg}-color)`;
+  }
+  return { bg: base, fg };
+}
+
+class AreaDomainButton extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = null;
+    this._hass = null;
+  }
+
+  static getStubConfig() {
+    return { type: "custom:area-domain-button", icon: "mdi:lightbulb-off", color: "amber" };
+  }
+
+  setConfig(config) {
+    if (!config || typeof config !== "object") throw new Error("Invalid configuration");
+    this._config = Object.assign({ fill: true, show_name: true }, config);
+    this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._state) this._updateState();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  getCardSize() {
+    return 1;
+  }
+
+  getGridOptions() {
+    return { columns: 3, rows: 2, min_columns: 2, min_rows: 1 };
+  }
+
+  _act(action) {
+    const hass = this._hass;
+    if (!hass || !action) return;
+    const kind = action.action || "none";
+
+    if (kind === "none") return;
+
+    if (kind === "toggle") {
+      const entity = action.entity || this._config.entity;
+      if (entity) hass.callService("homeassistant", "toggle", {}, { entity_id: entity });
+      return;
+    }
+
+    if (kind === "more-info") {
+      const entity = action.entity || this._config.entity;
+      if (!entity) return;
+      this.dispatchEvent(
+        new CustomEvent("hass-more-info", { detail: { entityId: entity }, bubbles: true, composed: true })
+      );
+      return;
+    }
+
+    if (kind === "navigate") {
+      if (!action.navigation_path) return;
+      history.pushState(null, "", action.navigation_path);
+      window.dispatchEvent(new CustomEvent("location-changed", { bubbles: true, composed: true }));
+      return;
+    }
+
+    if (kind === "url") {
+      if (action.url_path) window.open(action.url_path, "_blank", "noopener");
+      return;
+    }
+
+    if (kind === "perform-action" || kind === "call-service") {
+      const service = action.perform_action || action.service;
+      if (!service) return;
+      const [domain, name] = service.split(".");
+      if (!domain || !name) return;
+      hass.callService(domain, name, action.data || action.service_data || {}, action.target);
+    }
+  }
+
+  _updateState() {
+    const entity = this._config.entity;
+    if (!entity || !this._hass) return;
+    const stateObj = this._hass.states[entity];
+    if (!stateObj) return;
+    if (!this._config.name) {
+      this._label.textContent = (stateObj.attributes && stateObj.attributes.friendly_name) || entity;
+    }
+    if (!this._config.icon && stateObj.attributes && stateObj.attributes.icon) {
+      this._icon.icon = stateObj.attributes.icon;
+    }
+  }
+
+  _render() {
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+
+    const style = document.createElement("style");
+    style.textContent = BUTTON_STYLES;
+    root.appendChild(style);
+
+    const cfg = this._config;
+    const colors = buttonColors(cfg.color, cfg.fill !== false, cfg.text_color);
+
+    const btn = document.createElement("button");
+    btn.className = "btn";
+    btn.type = "button";
+    btn.style.setProperty("--adb-bg", colors.bg);
+    btn.style.setProperty("--adb-fg", colors.fg);
+
+    const icon = document.createElement("ha-icon");
+    icon.icon = cfg.icon || "mdi:gesture-tap-button";
+    btn.appendChild(icon);
+    this._icon = icon;
+
+    const label = document.createElement("span");
+    label.className = "name";
+    label.textContent = cfg.name || "";
+    if (cfg.show_name === false) label.classList.add("hidden");
+    btn.appendChild(label);
+    this._label = label;
+
+    btn.addEventListener("click", () => this._act(cfg.tap_action || { action: "none" }));
+    if (cfg.hold_action) {
+      let timer = null;
+      btn.addEventListener("pointerdown", () => {
+        timer = window.setTimeout(() => this._act(cfg.hold_action), 500);
+      });
+      const clear = () => {
+        if (timer) window.clearTimeout(timer);
+        timer = null;
+      };
+      btn.addEventListener("pointerup", clear);
+      btn.addEventListener("pointerleave", clear);
+    }
+
+    root.appendChild(btn);
+    this._state = true;
+    this._updateState();
+  }
+}
+
+const BUTTON_STYLES = `
+  :host { display: block; height: 100%; }
+  .btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    height: 100%;
+    min-height: 56px;
+    box-sizing: border-box;
+    padding: 10px 8px;
+    border: none;
+    border-radius: var(--ha-card-border-radius, 12px);
+    background: var(--adb-bg, var(--primary-color));
+    color: var(--adb-fg, #fff);
+    font: inherit;
+    font-family: var(--ha-font-family-body, inherit);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: filter 120ms ease-in-out;
+  }
+  .btn:hover { filter: brightness(1.06); }
+  .btn:active { filter: brightness(0.94); }
+  .btn:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+  ha-icon { --mdc-icon-size: 28px; display: inline-flex; }
+  .name {
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 14px;
+    text-align: center;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .name:empty, .hidden { display: none; }
+`;
+
+customElements.define("area-domain-button", AreaDomainButton);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: "area-domain-button",
+  name: "Area Domain Button",
+  description: "A coloured shortcut button that runs an action.",
+  preview: false,
+  documentationURL: "https://github.com/Gessink/area-domain-strategies",
+});
+
 /* ================================================================== *
  * Room view strategy: custom:area-domain-room
  *
@@ -1266,6 +1492,7 @@ customElements.define("area-domain-tab-chips", AreaDomainTabChips);
 // Headings Home Assistant has no translation for. Everything else asks hass.
 const SECTION_TITLES = {
   shortcuts: { en: "Shortcuts", nl: "Snelkoppelingen", de: "Verknüpfungen", fr: "Raccourcis" },
+  security: { en: "Security", nl: "Beveiliging", de: "Sicherheit", fr: "Sécurité" },
   other: { en: "Other devices", nl: "Andere apparaten", de: "Andere Geräte", fr: "Autres appareils" },
   rest: { en: "Other", nl: "Overig", de: "Sonstiges", fr: "Autre" },
 };
@@ -1277,19 +1504,55 @@ function builtinTitle(hass, key) {
   return entry[lang] || entry.en;
 }
 
+// The sensors worth a graph on a room page. Everything else is noise there,
+// so `sensors: all` is opt-in.
+const COMMON_SENSOR_CLASSES = ["temperature", "humidity", "atmospheric_pressure", "pressure"];
+
+const SECURITY_DEVICE_CLASSES = [
+  "door", "garage_door", "window", "opening", "motion", "occupancy", "presence",
+  "smoke", "gas", "carbon_monoxide", "moisture", "tamper", "safety", "problem",
+];
+
+// `alarm_control_panel` and `lock` have no device class, so the security
+// section has to match on domain OR device class rather than both.
+const ANY_DEVICE_CLASS_DOMAINS = ["alarm_control_panel", "lock"];
+
 const DEFAULT_ROOM_SECTIONS = [
   { key: "shortcuts" },
   { key: "light", domain: "light" },
   { key: "cover", domains: ["cover", "valve"] },
   { key: "climate", domains: ["climate", "water_heater"], card: "thermostat" },
   { key: "media_player", domain: "media_player" },
-  { key: "other", domains: ["switch", "fan", "vacuum", "lock", "lawn_mower", "siren", "humidifier", "remote"] },
-  { key: "sensor", domains: ["sensor", "binary_sensor"], vertical: true },
+  {
+    key: "security",
+    domains: ["alarm_control_panel", "lock", "binary_sensor"],
+    device_classes: SECURITY_DEVICE_CLASSES,
+    device_class_exempt_domains: ANY_DEVICE_CLASS_DOMAINS,
+  },
+  { key: "other", domains: ["switch", "fan", "vacuum", "lawn_mower", "siren", "humidifier", "remote"] },
+  { key: "sensor", domain: "sensor", device_classes: COMMON_SENSOR_CLASSES, card: "sensor" },
   { key: "rest", rest: true },
 ];
 
-// Domains that are not devices, so the catch-all leaves them alone.
+function roomSections(hass, cfg) {
+  if (Array.isArray(cfg.sections) && cfg.sections.length) return cfg.sections;
+  return DEFAULT_ROOM_SECTIONS.map((entry) => {
+    if (entry.key === "sensor" && cfg.sensors === "all") {
+      const all = Object.assign({}, entry);
+      delete all.device_classes;
+      all.domains = ["sensor", "binary_sensor"];
+      return all;
+    }
+    return entry;
+  });
+}
+
+// Domains the catch-all leaves alone: things that are not devices, plus the
+// readings the sensor and security sections deliberately filtered out. Asking
+// for three sensor classes and then getting every other one back under "Other"
+// would defeat the point.
 const REST_EXCLUDED_DOMAINS = [
+  "sensor", "binary_sensor",
   "scene", "script", "automation", "person", "device_tracker", "zone", "sun",
   "todo", "calendar", "tag", "event", "conversation", "stt", "tts", "image",
   "update", "input_boolean", "input_select", "input_number", "input_text",
@@ -1303,8 +1566,21 @@ function sectionKey(entry) {
 
 function sectionHeading(hass, entry) {
   if (entry.title !== undefined) return entry.title;
-  const builtin = builtinTitle(hass, sectionKey(entry));
+
+  const key = sectionKey(entry);
+  const builtin = builtinTitle(hass, key);
   if (builtin) return builtin;
+
+  // A section keyed on a domain is named after that domain, not after the
+  // first device class it happens to filter on: the sensor section is
+  // "Sensors", not "Temperature".
+  if (key && hass && hass.states && DOMAIN_ICONS[key] !== undefined) {
+    return chipName(hass, { domain: key });
+  }
+  if (key && asArray(entry.domains).concat(asArray(entry.domain)).includes(key)) {
+    return chipName(hass, { domain: key });
+  }
+
   return chipName(hass, chipFromConfig(entry));
 }
 
@@ -1312,30 +1588,40 @@ function sectionIcon(hass, entry) {
   if (entry.icon !== undefined) return entry.icon;
   const key = sectionKey(entry);
   if (key === "shortcuts") return "mdi:gesture-tap-button";
+  if (key === "security") return "mdi:shield-home";
   if (key === "rest") return "mdi:shape-outline";
   return chipIcon(chipFromConfig(entry));
 }
 
 /* -------------------- shortcuts -------------------- */
 
-function serviceButton(name, icon, service, target) {
-  return {
-    type: "button",
+const SHORTCUT_COLORS = {
+  lights_off: "amber",
+  vacuum: "teal",
+  scenes: "purple",
+};
+
+function serviceButton(name, icon, color, service, target, data) {
+  const card = {
+    type: "custom:area-domain-button",
     name,
     icon,
-    show_state: false,
+    color,
     tap_action: { action: "perform-action", perform_action: service, target },
   };
+  if (data) card.tap_action.data = data;
+  return card;
 }
 
 function customButton(button) {
-  const card = {
-    type: "button",
-    show_state: !!button.show_state,
-  };
+  const card = { type: "custom:area-domain-button" };
   if (button.name !== undefined) card.name = button.name;
   if (button.icon) card.icon = button.icon;
   if (button.entity) card.entity = button.entity;
+  if (button.color) card.color = button.color;
+  if (button.text_color) card.text_color = button.text_color;
+  if (button.fill === false) card.fill = false;
+  if (button.show_name === false) card.show_name = false;
 
   const action = button.tap_action || button.action;
   if (action) {
@@ -1384,7 +1670,7 @@ function shortcutCards(hass, cfg, entry, areas) {
     if (button === "lights_off") {
       if (!candidates(hass, scoped, { domain: "light" }).length) return;
       const name = `${chipName(hass, { domain: "light" })} ${lowerFirst(hass, stateName(hass, "light", undefined, "off"))}`;
-      cards.push(serviceButton(name, "mdi:lightbulb-off", "light.turn_off", { area_id: areas }));
+      cards.push(serviceButton(name, "mdi:lightbulb-off", entry.lights_off_color || SHORTCUT_COLORS.lights_off, "light.turn_off", { area_id: areas }));
       return;
     }
 
@@ -1402,18 +1688,16 @@ function shortcutCards(hass, cfg, entry, areas) {
 
       if (capable.length) {
         const name = tr(hass, "component.vacuum.services.clean_area.name") || "Clean area";
-        cards.push({
-          type: "button",
-          name,
-          icon: "mdi:robot-vacuum",
-          show_state: false,
-          tap_action: {
-            action: "perform-action",
-            perform_action: "vacuum.clean_area",
-            target: { entity_id: capable },
-            data: { cleaning_area_id: areas },
-          },
-        });
+        cards.push(
+          serviceButton(
+            name,
+            "mdi:robot-vacuum",
+            entry.vacuum_color || SHORTCUT_COLORS.vacuum,
+            "vacuum.clean_area",
+            { entity_id: capable },
+            { cleaning_area_id: areas }
+          )
+        );
         return;
       }
 
@@ -1422,13 +1706,19 @@ function shortcutCards(hass, cfg, entry, areas) {
       const vacuums = candidates(hass, scoped, { domain: "vacuum" });
       if (!vacuums.length) return;
       const name = tr(hass, "ui.card.vacuum.actions.start_cleaning") || "Start cleaning";
-      cards.push(serviceButton(name, "mdi:robot-vacuum", "vacuum.start", { entity_id: vacuums }));
+      cards.push(serviceButton(name, "mdi:robot-vacuum", entry.vacuum_color || SHORTCUT_COLORS.vacuum, "vacuum.start", { entity_id: vacuums }));
       return;
     }
 
     if (button === "scenes") {
       areaScenes(hass, cfg, areas).forEach((id) => {
-        cards.push({ type: "button", entity: id, show_state: false, tap_action: { action: "toggle" } });
+        cards.push({
+          type: "custom:area-domain-button",
+          entity: id,
+          color: entry.scene_color || SHORTCUT_COLORS.scenes,
+          icon: (hass.states[id].attributes || {}).icon,
+          tap_action: { action: "toggle" },
+        });
         used.push(id);
       });
     }
@@ -1459,6 +1749,28 @@ function roomSectionCards(hass, cfg, entry, areas) {
   if (entry.card === "thermostat" || entry.card === "humidifier") {
     headers.concat(items).forEach((id) => {
       cards.push({ type: entry.card, entity: id, grid_options: { columns: "full" } });
+    });
+    return { cards, used };
+  }
+
+  // The sensor card draws the last day as a line under the value. Only useful
+  // for something numeric, so anything else stays a tile.
+  if (entry.card === "sensor") {
+    headers.concat(items).forEach((id) => {
+      const stateObj = hass.states[id];
+      const attrs = (stateObj && stateObj.attributes) || {};
+      const numeric = attrs.unit_of_measurement !== undefined && !isNaN(parseFloat(stateObj.state));
+      if (numeric) {
+        cards.push({
+          type: "sensor",
+          entity: id,
+          graph: entry.graph === false ? "none" : "line",
+          detail: entry.detail || 1,
+          grid_options: { columns: tileColumns },
+        });
+      } else {
+        cards.push(tileFor(id, false));
+      }
     });
     return { cards, used };
   }
@@ -1503,7 +1815,7 @@ function buildRoomView(config, hass) {
   );
 
   const areas = resolveAreas(hass, cfg);
-  const entries = Array.isArray(cfg.sections) && cfg.sections.length ? cfg.sections : DEFAULT_ROOM_SECTIONS;
+  const entries = roomSections(hass, cfg);
 
   const claimed = new Set();
   const sections = [];
@@ -1537,7 +1849,7 @@ function buildRoomView(config, hass) {
       const result = shortcutCards(hass, cfg, entry, areas);
       result.used.forEach((id) => claimed.add(id));
       cards = result.cards.map((card) =>
-        Object.assign({ grid_options: { columns: entry.button_columns || 3 } }, card)
+        Object.assign({ grid_options: { columns: entry.button_columns || 3, rows: entry.button_rows || 2 } }, card)
       );
     } else {
       const result = roomSectionCards(hass, cfg, entry, areas);
@@ -1595,7 +1907,21 @@ function buildRoomView(config, hass) {
     view.badges = [badge];
   }
 
-  if (areas.length) view.title = areas.map((id) => areaName(hass, id)).join(" + ");
+  // Name and icon: yours if you set them, otherwise the areas this page is
+  // about and the icon of the first of them.
+  if (cfg.title !== undefined) {
+    if (cfg.title !== false) view.title = cfg.title;
+  } else if (areas.length) {
+    view.title = areas.map((id) => areaName(hass, id)).join(" + ");
+  }
+  if (cfg.icon !== undefined) {
+    if (cfg.icon !== false) view.icon = cfg.icon;
+  } else if (areas.length) {
+    const icon = areaIcon(hass, areas[0]);
+    if (icon) view.icon = icon;
+  }
+  if (cfg.path) view.path = cfg.path;
+
   return view;
 }
 

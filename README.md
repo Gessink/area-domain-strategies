@@ -87,18 +87,45 @@ views:
 
 | Section | Contents |
 | --- | --- |
-| Shortcuts | A button to turn every light in the room off, one to send the vacuum to this room, and the scenes assigned to the room |
+| Shortcuts | Coloured buttons: turn every light in the room off, send the vacuum to this room, and one per scene assigned to the room |
 | Lights | The covering group full width, then the lamps |
 | Covers | Covers and valves |
 | Climate | Thermostat cards for climate and water heaters |
 | Media | Media players |
-| Other devices | Switches, fans, vacuums, locks, mowers, sirens, humidifiers, remotes |
-| Sensors | Sensors and binary sensors, as vertical tiles |
+| Security | Alarm panels, locks, and the binary sensors that watch doors, windows, motion, smoke, gas, water and tampering |
+| Other devices | Switches, fans, vacuums, mowers, sirens, humidifiers, remotes |
+| Sensors | Temperature, humidity and air pressure, as sensor cards with a graph |
 | Other | The catch-all: anything in the room the sections above did not take |
 
 Sections with nothing in them are left out. The counters on top show active of total, so `0/7 aan` tells you there are seven lamps and none are on.
 
-The catch-all is what keeps this maintainable: buy a device in a domain nobody thought of and it appears by itself instead of quietly going missing. It skips things that are not devices, scenes and scripts and automations and the like; override that with `exclude_domains` on the catch-all entry.
+The catch-all is what keeps this maintainable: buy a device in a domain nobody thought of and it appears by itself instead of quietly going missing. It skips things that are not devices, scenes and scripts and automations and the like, and it also skips `sensor` and `binary_sensor`, because asking for three sensor classes and then getting every other one back under "Other" would defeat the point. Override the list with `exclude_domains` on the catch-all entry.
+
+### Naming the view
+
+```yaml
+strategy:
+  type: custom:area-domain-room
+  areas: [living_room]
+  title: Woonkamer          # default: the names of the areas, joined
+  icon: mdi:sofa            # default: the icon of the first area
+  path: woonkamer           # optional, for the URL
+```
+
+`title: false` and `icon: false` leave them off entirely.
+
+### Sensors
+
+Only temperature, humidity and air pressure by default, drawn as [sensor cards](https://www.home-assistant.io/dashboards/sensor/) so you get the last day as a line under the value. `sensors: all` widens it to every sensor and binary sensor in the room, and a section of your own can filter however you like:
+
+```yaml
+strategy:
+  type: custom:area-domain-room
+  areas: [living_room]
+  sensors: all
+```
+
+A sensor with no unit, or one whose state is not a number, falls back to a tile: there is nothing to graph.
 
 ### Your own sections
 
@@ -141,11 +168,41 @@ strategy:
 | `key` | `shortcuts` for the shortcut buttons; otherwise just an identifier used for the badge. |
 | `title` / `icon` | Override the heading. Empty means the translated domain or device class name. |
 | `domain` / `domains`, `device_class`, `label` / `labels`, `entities` | What the section matches, the same keys as everywhere else. |
-| `card` | `tile` (default), `thermostat` or `humidifier`. |
+| `card` | `tile` (default), `thermostat`, `humidifier` or `sensor` (a graph under the value). |
 | `tile_columns` | Card width out of 12 for this section only. |
 | `vertical` | Stack the tile's icon above its name. |
 | `rest` | Make this the catch-all. It always runs last, wherever you put it. |
-| `buttons` | Shortcuts only. Strings `lights_off`, `vacuum`, `scenes`, or an object with `name`, `icon` and `tap_action` / `service` / `entity`. |
+| `buttons` | Shortcuts only. Strings `lights_off`, `vacuum`, `scenes`, or an object with `name`, `icon`, `color` and `tap_action` / `service` / `entity`. |
+
+### The shortcut buttons
+
+Home Assistant's own button card has no colour option, and the tile card only colours itself while its entity is active, which a "turn everything off" button never is. So the shortcuts use `custom:area-domain-button`, a small card this repo ships:
+
+```yaml
+- key: shortcuts
+  buttons:
+    - lights_off                 # amber
+    - vacuum                     # teal
+    - scenes                     # purple
+    - name: Film
+      icon: mdi:movie
+      color: deep-purple
+      service: script.film
+```
+
+`color` takes the same values as everywhere else: a Home Assistant theme colour name or any CSS colour. The background is solid and the text picks black or white to stay readable on the theme colours; `text_color` overrides that, and `fill: false` gives the tinted look with a coloured icon instead. `lights_off_color`, `vacuum_color` and `scene_color` on the shortcuts entry recolour the built-ins, and `button_columns` / `button_rows` change how big they are.
+
+You can also use the card by itself, anywhere:
+
+```yaml
+type: custom:area-domain-button
+icon: mdi:party-popper
+name: Feest
+color: pink
+tap_action:
+  action: perform-action
+  perform_action: script.party
+```
 
 ### The vacuum button
 
