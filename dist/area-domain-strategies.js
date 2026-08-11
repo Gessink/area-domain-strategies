@@ -18,7 +18,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 
 /* ================================================================== *
  * Shared core
@@ -389,12 +389,31 @@ function friendlyName(hass, entityId) {
 
 // Groups first, then alphabetically. Keeps "All living room lights" above the
 // individual bulbs it controls.
-function sortEntities(hass, ids, groupsFirst) {
+// A tile grows a row per feature, so a dimmable light with a colour slider is
+// taller than a plain switch. Sorting on that first keeps equally tall cards
+// side by side instead of leaving ragged holes down the column.
+function cardRows(hass, entityId, withFeatures) {
+  if (withFeatures === false) return 0;
+  const stateObj = hass.states[entityId];
+  return stateObj ? featuresFor(stateObj).length : 0;
+}
+
+function sortEntities(hass, ids, cfg) {
+  const options = cfg || {};
+  const groupsFirst = options.groups_first !== false;
+  const byHeight = options.sort_by_height !== false;
+  const withFeatures = options.features !== false;
+
   return ids.slice().sort((a, b) => {
-    if (groupsFirst !== false) {
+    if (groupsFirst) {
       const ga = groupMembers(hass.states[a]) ? 0 : 1;
       const gb = groupMembers(hass.states[b]) ? 0 : 1;
       if (ga !== gb) return ga - gb;
+    }
+    if (byHeight) {
+      const ra = cardRows(hass, a, withFeatures);
+      const rb = cardRows(hass, b, withFeatures);
+      if (ra !== rb) return rb - ra;
     }
     return friendlyName(hass, a).localeCompare(friendlyName(hass, b));
   });
@@ -620,23 +639,31 @@ function areaGroupIcon(hass, group) {
 function sectionEntities(hass, cfg, chip) {
   const kept = candidates(hass, cfg, chip);
   const keptSet = new Set(kept);
-  const items = sortEntities(hass, filterByMode(hass, chip, kept, cfg.mode), cfg.groups_first);
+  const items = sortEntities(hass, filterByMode(hass, chip, kept, cfg.mode), cfg);
 
   const rule = cfg.groups || "auto";
   if (cfg.group_header === false || (rule !== "auto" && rule !== "strict")) {
     return { headers: [], items };
   }
 
+  // Only a group that covers the whole section earns the spot on top: it has
+  // to hold every device shown below it. A group over half the lamps is not a
+  // master control, so it stays out. Of the groups that do cover, the tightest
+  // one wins, so an area group beats a house-wide group.
+  if (items.length < 2) return { headers: [], items };
+
   const withGroups = candidates(hass, Object.assign({}, cfg, { groups: "include" }), chip);
-  const headers = withGroups
+  const covering = withGroups
     .filter((id) => {
       if (keptSet.has(id)) return false;
       const members = groupMembers(hass.states[id]);
-      return !!members && members.some((m) => keptSet.has(m));
+      if (!members || !members.length) return false;
+      const memberSet = new Set(members);
+      return items.every((item) => memberSet.has(item));
     })
-    .sort((a, b) => groupMembers(hass.states[b]).length - groupMembers(hass.states[a]).length);
+    .sort((a, b) => groupMembers(hass.states[a]).length - groupMembers(hass.states[b]).length);
 
-  return { headers, items };
+  return { headers: covering.slice(0, 1), items };
 }
 
 function buildSection(config, hass) {
@@ -904,31 +931,28 @@ function offHashChange(fn) {
 // after four hops, so an unexpected shape means a gap, not a hidden page.
 function gridItemFor(startEl) {
   let node = startEl;
-  for (let i = 0; i < 4; i++) {
-    const parent = node.parentElement;
+  for (let i = 0; i < 5; i++) {
+    const root = node.getRootNode();
+    const parent = node.parentElement || (root && root.host) || null;
     if (!parent) break;
     if (parent.classList && parent.classList.contains("container")) break;
-    if (parent.children.length !== 1) break;
+    if (parent.children && parent.children.length !== 1) break;
     node = parent;
   }
   return node;
 }
 
-// The grid item holding this card: out of hui-card's shadow root first.
-function gridItemOf(el) {
-  const root = el.getRootNode();
-  const host = root && root.host ? root.host : null;
-  if (!host || host.tagName !== "HUI-CARD") return null;
-  return gridItemFor(host);
-}
+const gridItemOf = gridItemFor;
 
 // The section a card sits in, so an area with nothing on this tab can collapse
-// instead of leaving an empty column.
+// instead of leaving an empty column. Climbs through both ordinary parents and
+// shadow roots, because whether a card ends up in the light or shadow DOM of
+// its section is Home Assistant's business, not something to rely on.
 function sectionOf(el) {
   let node = el;
-  for (let i = 0; i < 6 && node; i++) {
+  for (let i = 0; i < 20 && node; i++) {
     const root = node.getRootNode();
-    node = root && root.host ? root.host : null;
+    node = node.parentElement || (root && root.host) || null;
     if (node && node.tagName === "HUI-SECTION") return node;
   }
   return null;
@@ -1035,7 +1059,7 @@ class AreaDomainHashCard extends HTMLElement {
 
     this.style.display = visible ? "" : "none";
     const item = gridItemOf(this);
-    if (item) item.style.display = visible ? "" : "none";
+    if (item && item !== this) item.style.display = visible ? "" : "none";
     reportVisibility(sectionOf(this), this, visible);
   }
 }
@@ -1353,8 +1377,15 @@ const TABS_SCHEMA = [
       { name: "group_header", selector: { boolean: {} } },
     ],
   },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "sort_by_height", selector: { boolean: {} } },
+      { name: "groups_first", selector: { boolean: {} } },
+    ],
+  },
   { name: "groups", selector: GROUPS_SELECTOR },
-  { name: "groups_first", selector: { boolean: {} } },
   { name: "exclude_keywords", selector: { text: { multiple: true } } },
   { name: "include_keywords", selector: { text: { multiple: true } } },
   {
@@ -1415,6 +1446,7 @@ const LABELS = {
   columns: "Maximum sections side by side",
   tile_columns: "Card width, out of 12 (6 = two per row)",
   group_header: "Put a covering group on top, full width",
+  sort_by_height: "Keep equally tall cards together",
   show_counts: "Show how many are active under each tab",
   area_group_name: "Heading (empty = the area names joined)",
   hide_empty_areas: "Hide areas without matching devices",
@@ -1749,6 +1781,8 @@ class AreaDomainTabsEditor extends BaseEditor {
           features: cfg.features !== false,
           hide_empty_areas: cfg.hide_empty_areas !== false,
           tile_columns: cfg.tile_columns || 6,
+          group_header: cfg.group_header !== false,
+          sort_by_height: cfg.sort_by_height !== false,
           groups: cfg.groups || "auto",
           groups_first: cfg.groups_first !== false,
           exclude_keywords: cfg.exclude_keywords || [],
@@ -1764,6 +1798,8 @@ class AreaDomainTabsEditor extends BaseEditor {
           cfg.features = value.features !== false;
           cfg.hide_empty_areas = value.hide_empty_areas !== false;
           cfg.tile_columns = value.tile_columns || 6;
+          cfg.group_header = value.group_header !== false;
+          cfg.sort_by_height = value.sort_by_height !== false;
           cfg.groups = value.groups || "auto";
           cfg.groups_first = value.groups_first !== false;
           cfg.exclude_keywords = value.exclude_keywords || [];

@@ -49,6 +49,7 @@ The view is a plain Home Assistant sections view: `max_columns`, the responsive 
 | `columns` | number | `3` | `max_columns`: how many sections fit side by side. |
 | `tile_columns` | number | `6` | Card width out of 12. `6` is two per row, `12` is full width. |
 | `group_header` | boolean | `true` | Put a group covering the section on top, full width. See [Groups](#groups). |
+| `sort_by_height` | boolean | `true` | Keep equally tall cards together. See [Card order](#card-order). |
 | `hide_empty_areas` | boolean | `true` | Skip areas with no matching devices at all. |
 | `show_counts` | boolean | `true` | Show how many are active under each chip. |
 | `features` | boolean | `true` | Give tile cards their domain controls. |
@@ -170,11 +171,19 @@ Group helpers expose their members in the `entity_id` attribute. `groups` decide
 
 ### The covering group
 
-A group that `auto` or `strict` dropped from the list is not thrown away: if its members overlap what the section shows, it comes back on top of that section as a **full width** card, above the individual devices. So an area with a "Slaapkamer lampen" group gets that group as a master control across the section, with the individual lamps in two columns below it, and the group is never counted twice.
+A group that `auto` or `strict` dropped from the list is not thrown away: if it **covers the whole section**, it comes back on top as a **full width** card, above the individual devices. So an area with a "Slaapkamer lampen" group gets that group as a master control across the section, with the individual lamps in two columns below it, and the group is never counted twice.
 
-With combined areas the same applies: a group covering the lamps of either area shows up on top of the merged section.
+Covering means every device shown in that section is a member of the group, unavailable ones included. A group over half the lamps is not a master control, so it stays out, and under `auto` it was already dropped from the list, so it simply does not appear.
+
+At most one group gets the spot. When several cover the section, the tightest one wins, so a per-area group beats a house-wide one. With combined areas a group only qualifies if it covers the devices of every area in the merged section.
 
 Set `group_header: false` to leave those groups out entirely, or `groups: include` to list them as ordinary tiles instead.
+
+## Card order
+
+A tile grows a row per feature, so a light with a brightness slider and a colour temperature slider is taller than a plain on/off switch. Mixed heights side by side leave ragged holes down a column, so cards are ordered by height first: the tallest tiles at the top of the section, the plain ones at the bottom, alphabetically within each height.
+
+The full order is: the covering group, then tall to short, then by name. Set `sort_by_height: false` for plain alphabetical order, or `groups_first: false` to stop groups being pulled to the front.
 
 ## Tile card features
 
