@@ -87,7 +87,7 @@ views:
 
 | Section | Contents |
 | --- | --- |
-| Shortcuts | A button to turn every light in the room off, one to send the vacuum, and the scenes assigned to the room |
+| Shortcuts | A button to turn every light in the room off, one to send the vacuum to this room, and the scenes assigned to the room |
 | Lights | The covering group full width, then the lamps |
 | Covers | Covers and valves |
 | Climate | Thermostat cards for climate and water heaters |
@@ -147,17 +147,27 @@ strategy:
 | `rest` | Make this the catch-all. It always runs last, wherever you put it. |
 | `buttons` | Shortcuts only. Strings `lights_off`, `vacuum`, `scenes`, or an object with `name`, `icon` and `tap_action` / `service` / `entity`. |
 
-The vacuum button calls `vacuum.start` on the vacuums in the room, which starts a full clean. For cleaning just this room, point a custom button at your own script:
+### The vacuum button
+
+Home Assistant 2026.3 added [`vacuum.clean_area`][clean-area], which sends a robot to the areas you already have instead of to vendor segment numbers. The button uses it whenever a vacuum reports the `CLEAN_AREA` feature, wherever in the house that robot happens to dock, and passes this room as `cleaning_area_id`:
+
+```yaml
+action: vacuum.clean_area
+target:
+  entity_id: vacuum.roborock
+data:
+  cleaning_area_id: [living_room]
+```
+
+Point it at one specific robot with `vacuum_entity` on the shortcuts entry. If nothing supports area cleaning, the button falls back to `vacuum.start` on the vacuums in the room, which is a full run; in that case a custom button aimed at your own script is the better answer:
 
 ```yaml
 - key: shortcuts
-  buttons:
-    - lights_off
-    - name: Stofzuig hier
-      icon: mdi:robot-vacuum
-      service: script.clean_living_room
-    - scenes
+  vacuum_entity: vacuum.roborock
+  buttons: [lights_off, vacuum, scenes]
 ```
+
+[clean-area]: https://www.home-assistant.io/actions/vacuum.clean_area/
 
 ## Areas view
 

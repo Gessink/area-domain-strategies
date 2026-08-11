@@ -18,7 +18,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.4.0";
+const VERSION = "1.4.1";
 
 /* ================================================================== *
  * Shared core
@@ -428,6 +428,8 @@ const COVER_CLOSE = 2;
 const COVER_SET_POSITION = 4;
 const FAN_SET_SPEED = 1;
 const MEDIA_VOLUME_SET = 4;
+// VacuumEntityFeature.CLEAN_AREA, added in Home Assistant 2026.3.
+const VACUUM_CLEAN_AREA = 16384;
 
 const BRIGHTNESS_MODES = ["brightness", "color_temp", "hs", "xy", "rgb", "rgbw", "rgbww", "white"];
 
@@ -1387,6 +1389,36 @@ function shortcutCards(hass, cfg, entry, areas) {
     }
 
     if (button === "vacuum") {
+      // Home Assistant 2026.3 added vacuum.clean_area, which sends the robot to
+      // the areas you already have rather than to vendor segment numbers. Use
+      // it when the vacuum reports CLEAN_AREA, wherever in the house it docks.
+      const capable = entry.vacuum_entity
+        ? asArray(entry.vacuum_entity)
+        : Object.keys(hass.states).filter((id) => {
+            if (id.split(".")[0] !== "vacuum") return false;
+            const attrs = hass.states[id].attributes || {};
+            return !!((attrs.supported_features || 0) & VACUUM_CLEAN_AREA);
+          });
+
+      if (capable.length) {
+        const name = tr(hass, "component.vacuum.services.clean_area.name") || "Clean area";
+        cards.push({
+          type: "button",
+          name,
+          icon: "mdi:robot-vacuum",
+          show_state: false,
+          tap_action: {
+            action: "perform-action",
+            perform_action: "vacuum.clean_area",
+            target: { entity_id: capable },
+            data: { cleaning_area_id: areas },
+          },
+        });
+        return;
+      }
+
+      // Nothing that can clean a single area: fall back to starting whatever
+      // vacuum lives here, which is a full run.
       const vacuums = candidates(hass, scoped, { domain: "vacuum" });
       if (!vacuums.length) return;
       const name = tr(hass, "ui.card.vacuum.actions.start_cleaning") || "Start cleaning";
