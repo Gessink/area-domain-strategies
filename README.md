@@ -44,15 +44,33 @@ The view is a plain Home Assistant sections view: `max_columns`, the responsive 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `areas` | list | all areas | Areas to show, in this order. |
+| `area_groups` | list | `[]` | Areas that share one section. See [Combining areas](#combining-areas). |
 | `chips` | list | auto-detected | One entry per tab. Takes `domain`, `device_class`, `label`, `name`, `icon`. |
 | `columns` | number | `3` | `max_columns`: how many sections fit side by side. |
 | `tile_columns` | number | `6` | Card width out of 12. `6` is two per row, `12` is full width. |
+| `group_header` | boolean | `true` | Put a group covering the section on top, full width. See [Groups](#groups). |
 | `hide_empty_areas` | boolean | `true` | Skip areas with no matching devices at all. |
 | `show_counts` | boolean | `true` | Show how many are active under each chip. |
 | `features` | boolean | `true` | Give tile cards their domain controls. |
 | `groups` / `groups_first` | | | See [Groups](#groups). |
 | `mode` | `all` \| `active` \| `inactive` \| `unavailable` | `all` | Which entities the sections list. |
 | `exclude_*` / `include_*` | | | See the section options below. |
+
+### Combining areas
+
+Two areas can share one section:
+
+```yaml
+strategy:
+  type: custom:area-domain-tabs
+  areas: [living_room, kitchen, hallway, bedroom]
+  area_groups:
+    - areas: [living_room, kitchen]
+      name: Beneden          # optional, defaults to "Woonkamer + Keuken"
+      icon: mdi:sofa         # optional
+```
+
+Areas you leave out of `area_groups` keep a section of their own. A combined section takes the place of the first of its areas, so the order in `areas` still decides the layout. Works the same way on the areas view strategy.
 
 ## Areas view
 
@@ -119,9 +137,23 @@ Home Assistant strategies generate their config once and do not re-run on a clic
 
 So the strategy generates every tab's cards up front and wraps each one in a `custom:area-domain-hash-card`. That wrapper renders its card only while the hash matches, and builds the inner card lazily the first time it is needed. Everything around the wrappers is native: the view, the sections, `max_columns`, the 12 column grid, and the tile cards themselves.
 
-One caveat worth knowing. A hidden element keeps its slot in a CSS grid, so collapsing only the wrapper would leave a hole where the card was. The wrapper therefore also collapses the grid item Home Assistant put around it, and hides a section once none of its cards are showing. That is one or two steps into Home Assistant's own DOM, each guarded: if a future release changes that shape, the tabs keep working and the worst case is a gap in the layout.
+One caveat worth knowing. A hidden element keeps its slot in a CSS grid, so collapsing only the wrapper would leave a hole where the card was. The wrapper therefore also collapses the grid item Home Assistant put around it, and once none of a section's cards are showing it collapses that section's grid item too, so an area with nothing on the active tab leaves no gap. Finding those items means climbing out of single-child wrappers until the parent is the grid itself, stopping at Home Assistant's `container` class. Every step is guarded: if a future release changes that shape, the tabs keep working and the worst case is a gap in the layout.
 
-`grid_options` on the wrappers keeps the sizing native: `columns: full` for the area heading, `tile_columns` for the tiles.
+`grid_options` on the wrappers keeps the sizing native: `columns: full` for the area heading and the covering group, `tile_columns` for the tiles.
+
+## Where is the editor?
+
+Home Assistant offers a strategy editor for **dashboard** strategies. Its edit-view dialog does not do the same for view strategies, so `custom:area-domain-tabs` is registered both ways and the dashboard form is the one with a UI:
+
+1. **Settings → Dashboards → Add dashboard → New dashboard from scratch**, open it
+2. Pencil → three-dot menu → **Raw configuration editor**, and put in:
+   ```yaml
+   strategy:
+     type: custom:area-domain-tabs
+   ```
+3. Save. From now on, pencil → the gear icon opens the editor: area pickers, combined areas, tabs, columns, all of it.
+
+Inside an existing dashboard you can still use it as a view strategy (`views: - strategy: ...`), but there you configure it in YAML.
 
 ## Groups
 
@@ -134,7 +166,15 @@ Group helpers expose their members in the `entity_id` attribute. `groups` decide
 | `exclude` | Never list group entities. |
 | `include` | List groups like any other entity. |
 
-`groups_first: true` puts whichever groups survive at the top of the list. Combine `groups: include` with `groups_first: true` when you want the group as a master control above its members.
+`groups_first: true` puts whichever groups survive at the top of the list.
+
+### The covering group
+
+A group that `auto` or `strict` dropped from the list is not thrown away: if its members overlap what the section shows, it comes back on top of that section as a **full width** card, above the individual devices. So an area with a "Slaapkamer lampen" group gets that group as a master control across the section, with the individual lamps in two columns below it, and the group is never counted twice.
+
+With combined areas the same applies: a group covering the lamps of either area shows up on top of the merged section.
+
+Set `group_header: false` to leave those groups out entirely, or `groups: include` to list them as ordinary tiles instead.
 
 ## Tile card features
 

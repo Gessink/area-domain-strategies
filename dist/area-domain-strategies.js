@@ -18,7 +18,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 
 /* ================================================================== *
  * Shared core
@@ -565,20 +565,87 @@ function autoChips(hass, cfg) {
 }
 
 /* ================================================================== *
+ * Area groups
+ *
+ * Two areas can share one section. An area that is not named in `area_groups`
+ * keeps its own section, and a merged section takes the place of the first of
+ * its areas so the configured order survives.
+ * ================================================================== */
+
+function resolveAreaGroups(hass, cfg) {
+  const areas = resolveAreas(hass, cfg);
+  const configured = asArray(cfg.area_groups).map((entry) =>
+    Array.isArray(entry) ? { areas: entry } : entry || {}
+  );
+
+  const out = [];
+  const placed = new Set();
+
+  areas.forEach((areaId) => {
+    if (placed.has(areaId)) return;
+
+    const group = configured.find((g) => asArray(g.areas).includes(areaId));
+    if (!group) {
+      placed.add(areaId);
+      out.push({ areas: [areaId] });
+      return;
+    }
+
+    const members = asArray(group.areas).filter((id) => areas.includes(id));
+    members.forEach((id) => placed.add(id));
+    out.push({ areas: members, name: group.name, icon: group.icon });
+  });
+
+  return out;
+}
+
+function areaGroupName(hass, group) {
+  if (group.name) return group.name;
+  return group.areas.map((id) => areaName(hass, id)).join(" + ");
+}
+
+function areaGroupIcon(hass, group) {
+  if (group.icon) return group.icon;
+  return group.areas.length === 1 ? areaIcon(hass, group.areas[0]) : undefined;
+}
+
+/* ================================================================== *
  * Section strategy: custom:area-domain-section
  * ================================================================== */
+
+// Splits what a section shows into the group that covers it, which goes on top
+// across the full width, and the individual devices below it. The covering
+// group is one the group rules already dropped from the list, so it is shown
+// once as a master control rather than counted twice.
+function sectionEntities(hass, cfg, chip) {
+  const kept = candidates(hass, cfg, chip);
+  const keptSet = new Set(kept);
+  const items = sortEntities(hass, filterByMode(hass, chip, kept, cfg.mode), cfg.groups_first);
+
+  const rule = cfg.groups || "auto";
+  if (cfg.group_header === false || (rule !== "auto" && rule !== "strict")) {
+    return { headers: [], items };
+  }
+
+  const withGroups = candidates(hass, Object.assign({}, cfg, { groups: "include" }), chip);
+  const headers = withGroups
+    .filter((id) => {
+      if (keptSet.has(id)) return false;
+      const members = groupMembers(hass.states[id]);
+      return !!members && members.some((m) => keptSet.has(m));
+    })
+    .sort((a, b) => groupMembers(hass.states[b]).length - groupMembers(hass.states[a]).length);
+
+  return { headers, items };
+}
 
 function buildSection(config, hass) {
   const cfg = Object.assign({ groups: "auto", groups_first: true, mode: "all", features: true }, config || {});
   const chip = cfg.chip || chipFromConfig(cfg);
   const areas = resolveAreas(hass, cfg);
+  const scoped = Object.assign({}, cfg, { areas });
 
-  const ids = sortEntities(
-    hass,
-    filterByMode(hass, chip, candidates(hass, Object.assign({}, cfg, { areas }), chip), cfg.mode),
-    cfg.groups_first
-  );
-
+  const { headers, items } = sectionEntities(hass, scoped, chip);
   const cards = [];
 
   if (cfg.title !== false) {
@@ -595,11 +662,14 @@ function buildSection(config, hass) {
     });
   }
 
-  ids.forEach((id) => cards.push(tileCard(hass, id, cfg.features)));
+  headers.forEach((id) =>
+    cards.push(Object.assign(tileCard(hass, id, cfg.features), { grid_options: { columns: "full" } }))
+  );
+  items.forEach((id) => cards.push(tileCard(hass, id, cfg.features)));
 
   const section = { type: "grid", cards };
   if (cfg.column_span) section.column_span = cfg.column_span;
-  if (!ids.length && cfg.hide_when_empty !== false) section.cards = [];
+  if (!items.length && !headers.length && cfg.hide_when_empty !== false) section.cards = [];
   return section;
 }
 
@@ -628,14 +698,14 @@ customElements.define("ll-strategy-section-area-domain-section", AreaDomainSecti
 
 function areaSections(config, hass, chip) {
   const cfg = config;
-  return resolveAreas(hass, cfg)
-    .map((areaId) =>
+  return resolveAreaGroups(hass, cfg)
+    .map((group) =>
       buildSection(
         Object.assign({}, cfg, {
-          areas: [areaId],
+          areas: group.areas,
           chip,
-          title: areaName(hass, areaId),
-          icon: cfg.area_icons === false ? undefined : areaIcon(hass, areaId),
+          title: areaGroupName(hass, group),
+          icon: cfg.area_icons === false ? undefined : areaGroupIcon(hass, group),
         }),
         hass
       )
@@ -713,28 +783,28 @@ function buildTabsView(config, hass) {
     chip,
   }));
 
-  const sections = resolveAreas(hass, cfg)
-    .map((areaId) => {
-      const scoped = Object.assign({}, cfg, { areas: [areaId] });
+  const sections = resolveAreaGroups(hass, cfg)
+    .map((group) => {
+      const scoped = Object.assign({}, cfg, { areas: group.areas });
       const cards = [];
 
       tabs.forEach((tab, i) => {
-        const ids = sortEntities(
-          hass,
-          filterByMode(hass, tab.chip, candidates(hass, scoped, tab.chip), cfg.mode),
-          cfg.groups_first
-        );
-        if (!ids.length) return;
+        const { headers, items } = sectionEntities(hass, scoped, tab.chip);
+        if (!items.length && !headers.length) return;
 
         cards.push(
           hashCard(tab.slug, i === 0, "full", {
             type: "heading",
-            heading: areaName(hass, areaId),
+            heading: areaGroupName(hass, group),
             heading_style: "title",
-            icon: cfg.area_icons === false ? undefined : areaIcon(hass, areaId),
+            icon: cfg.area_icons === false ? undefined : areaGroupIcon(hass, group),
           })
         );
-        ids.forEach((id) => {
+        // A group covering the whole section sits on top, full width.
+        headers.forEach((id) => {
+          cards.push(hashCard(tab.slug, i === 0, "full", tileCard(hass, id, cfg.features)));
+        });
+        items.forEach((id) => {
           cards.push(hashCard(tab.slug, i === 0, cfg.tile_columns, tileCard(hass, id, cfg.features)));
         });
       });
@@ -773,6 +843,33 @@ class AreaDomainTabsStrategy {
 
 customElements.define("ll-strategy-view-area-domain-tabs", AreaDomainTabsStrategy);
 
+// The same page as a dashboard strategy: one dashboard, one view, the same
+// config. Home Assistant offers a strategy editor for dashboards, which the
+// edit-view dialog does not do for view strategies, so this is the route to
+// configuring it without touching YAML.
+function buildTabsDashboard(config, hass) {
+  const cfg = config || {};
+  const view = buildTabsView(cfg, hass);
+  if (cfg.title) view.title = cfg.title;
+  return { views: [view] };
+}
+
+class AreaDomainTabsDashboardStrategy {
+  static async generate(config, hass) {
+    return buildTabsDashboard(config, hass);
+  }
+
+  static async generateDashboard(info) {
+    return buildTabsDashboard(info.config, info.hass);
+  }
+
+  static async getConfigElement() {
+    return document.createElement("area-domain-tabs-strategy-editor");
+  }
+}
+
+customElements.define("ll-strategy-dashboard-area-domain-tabs", AreaDomainTabsDashboardStrategy);
+
 /* ================================================================== *
  * Hash plumbing
  *
@@ -800,17 +897,29 @@ function offHashChange(fn) {
   hashListeners.delete(fn);
 }
 
-// A hidden element keeps its slot in the section grid, so the grid item Home
-// Assistant put around it has to collapse too. That means reaching one or two
-// steps into Home Assistant's own DOM. Every step is guarded: if the shape
-// changes, the worst case is a gap in the layout, not a broken page.
+// A hidden element keeps its slot in a CSS grid, so whatever Home Assistant
+// placed in that slot has to collapse too. Climb out of any single-child
+// wrappers until the parent is the grid itself: a grid container has many
+// children, a wrapper has one. Stops at Home Assistant's `container` class and
+// after four hops, so an unexpected shape means a gap, not a hidden page.
+function gridItemFor(startEl) {
+  let node = startEl;
+  for (let i = 0; i < 4; i++) {
+    const parent = node.parentElement;
+    if (!parent) break;
+    if (parent.classList && parent.classList.contains("container")) break;
+    if (parent.children.length !== 1) break;
+    node = parent;
+  }
+  return node;
+}
+
+// The grid item holding this card: out of hui-card's shadow root first.
 function gridItemOf(el) {
   const root = el.getRootNode();
   const host = root && root.host ? root.host : null;
   if (!host || host.tagName !== "HUI-CARD") return null;
-  const parent = host.parentElement;
-  if (parent && parent.classList && parent.classList.contains("card")) return parent;
-  return host;
+  return gridItemFor(host);
 }
 
 // The section a card sits in, so an area with nothing on this tab can collapse
@@ -837,8 +946,13 @@ function reportVisibility(sectionEl, card, visible) {
     sectionMembers.set(sectionEl, members);
   }
   members.set(card, visible);
+
   const any = Array.from(members.values()).some(Boolean);
+  // Collapse the section's own grid item as well, otherwise an area with
+  // nothing on this tab leaves an empty column behind.
+  const item = gridItemFor(sectionEl);
   sectionEl.style.display = any ? "" : "none";
+  if (item !== sectionEl) item.style.display = any ? "" : "none";
 }
 
 /* ================================================================== *
@@ -1231,7 +1345,14 @@ const TABS_SCHEMA = [
       { name: "hide_empty_areas", selector: { boolean: {} } },
     ],
   },
-  { name: "tile_columns", selector: { number: { min: 1, max: 12, mode: "box" } } },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "tile_columns", selector: { number: { min: 1, max: 12, mode: "box" } } },
+      { name: "group_header", selector: { boolean: {} } },
+    ],
+  },
   { name: "groups", selector: GROUPS_SELECTOR },
   { name: "groups_first", selector: { boolean: {} } },
   { name: "exclude_keywords", selector: { text: { multiple: true } } },
@@ -1242,6 +1363,18 @@ const TABS_SCHEMA = [
     schema: [
       { name: "include_hidden", selector: { boolean: {} } },
       { name: "include_diagnostic", selector: { boolean: {} } },
+    ],
+  },
+];
+
+const AREA_GROUP_SCHEMA = [
+  { name: "areas", selector: { area: { multiple: true } } },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "name", selector: { text: {} } },
+      { name: "icon", selector: { icon: {} } },
     ],
   },
 ];
@@ -1281,7 +1414,9 @@ const LABELS = {
   column_span: "Section width in columns",
   columns: "Maximum sections side by side",
   tile_columns: "Card width, out of 12 (6 = two per row)",
+  group_header: "Put a covering group on top, full width",
   show_counts: "Show how many are active under each tab",
+  area_group_name: "Heading (empty = the area names joined)",
   hide_empty_areas: "Hide areas without matching devices",
   exclude_keywords: "Skip entities whose id or name contains",
   include_keywords: "Only include entities whose id or name contains",
@@ -1399,6 +1534,91 @@ class BaseEditor extends HTMLElement {
     root.appendChild(style);
     return root;
   }
+
+  // A reorderable list of collapsible panels, one per entry, each holding its
+  // own ha-form. Used for both the tabs and the combined areas.
+  _panelList(root, opts) {
+    const usePanel = !!customElements.get("ha-expansion-panel");
+    const items = opts.items;
+    const open = opts.open;
+
+    items.forEach((item, i) => {
+      const swap = (a, b) => {
+        [items[a], items[b]] = [items[b], items[a]];
+        [open[a], open[b]] = [open[b], open[a]];
+        this._emit();
+        this._render();
+      };
+      const buttons = [
+        this._button("↑", () => swap(i, i - 1), i === 0),
+        this._button("↓", () => swap(i, i + 1), i === items.length - 1),
+        this._button("✕", () => {
+          items.splice(i, 1);
+          open.splice(i, 1);
+          this._emit();
+          this._render();
+        }),
+      ];
+
+      const title = opts.title(item, i);
+      let box;
+      let titleEl;
+
+      if (usePanel) {
+        box = document.createElement("ha-expansion-panel");
+        box.outlined = true;
+        box.header = title;
+        box.expanded = !!open[i];
+        box.addEventListener("expanded-changed", (ev) => {
+          open[i] = !!ev.detail.expanded;
+        });
+        const icons = document.createElement("div");
+        icons.slot = "icons";
+        icons.className = "panel-icons";
+        buttons.forEach((b) => {
+          b.addEventListener("click", (ev) => ev.stopPropagation());
+          icons.appendChild(b);
+        });
+        box.appendChild(icons);
+        titleEl = { set textContent(value) { box.header = value; } };
+      } else {
+        box = document.createElement("div");
+        box.className = "chip-box";
+        const head = document.createElement("div");
+        head.className = "chip-head";
+        titleEl = document.createElement("span");
+        titleEl.textContent = title;
+        const spacer = document.createElement("span");
+        spacer.className = "spacer";
+        head.appendChild(titleEl);
+        head.appendChild(spacer);
+        buttons.forEach((b) => head.appendChild(b));
+        box.appendChild(head);
+      }
+
+      box.appendChild(
+        this._makeForm(opts.data(item, i), opts.schema, (value) => {
+          items[i] = opts.apply(value, item, i);
+          titleEl.textContent = opts.title(items[i], i);
+          this._emit();
+        })
+      );
+
+      root.appendChild(box);
+    });
+  }
+
+  _heading(root, text, hint) {
+    const h = document.createElement("h4");
+    h.textContent = text;
+    root.appendChild(h);
+    if (hint) {
+      const p = document.createElement("p");
+      p.className = "hint";
+      p.textContent = hint;
+      root.appendChild(p);
+    }
+  }
 }
 
 /* -------------------- section strategy editor -------------------- */
@@ -1493,16 +1713,21 @@ class AreaDomainTabsEditor extends BaseEditor {
   constructor() {
     super();
     this._open = [];
+    this._openAreas = [];
   }
 
   _prepare() {
     if (!Array.isArray(this._config.chips)) this._config.chips = [];
+    if (!Array.isArray(this._config.area_groups)) this._config.area_groups = [];
     this._open.length = this._config.chips.length;
+    this._openAreas.length = this._config.area_groups.length;
   }
 
-  _moveOpen(from, to) {
-    const open = this._open;
-    [open[from], open[to]] = [open[to], open[from]];
+  _areaGroupTitle(group, i) {
+    if (group.name) return group.name;
+    const list = asArray(group.areas);
+    if (this._hass && list.length) return list.map((id) => areaName(this._hass, id)).join(" + ");
+    return `Combined area ${i + 1}`;
   }
 
   _chipTitle(chip, i) {
@@ -1550,104 +1775,72 @@ class AreaDomainTabsEditor extends BaseEditor {
       )
     );
 
-    const heading = document.createElement("h4");
-    heading.textContent = "Tabs";
-    root.appendChild(heading);
+    this._heading(
+      root,
+      "Combined areas",
+      "Put two or more areas in one section. Areas you leave out keep a section of their own."
+    );
 
-    const hint = document.createElement("p");
-    hint.className = "hint";
-    hint.textContent = cfg.chips.length
-      ? "Each tab matches a device type."
-      : "No tabs configured: the domains found in the selected areas are used automatically.";
-    root.appendChild(hint);
+    this._panelList(root, {
+      items: cfg.area_groups,
+      open: this._openAreas,
+      schema: AREA_GROUP_SCHEMA,
+      title: (group, i) => this._areaGroupTitle(group, i),
+      data: (group) => ({
+        areas: group.areas || [],
+        name: group.name || "",
+        icon: group.icon || "",
+      }),
+      apply: (value) => {
+        const next = {};
+        if (value.areas && value.areas.length) next.areas = value.areas;
+        if (value.name) next.name = value.name;
+        if (value.icon) next.icon = value.icon;
+        return next;
+      },
+    });
 
-    const usePanel = !!customElements.get("ha-expansion-panel");
+    const addAreaRow = document.createElement("div");
+    addAreaRow.className = "add-row";
+    addAreaRow.appendChild(
+      this._button("+ Combine areas", () => {
+        cfg.area_groups.push({ areas: [] });
+        this._openAreas[cfg.area_groups.length - 1] = true;
+        this._emit();
+        this._render();
+      })
+    );
+    root.appendChild(addAreaRow);
 
-    cfg.chips.forEach((chip, i) => {
-      const title = this._chipTitle(chip, i);
-      const buttons = [
-        this._button("↑", () => {
-          const c = cfg.chips;
-          [c[i - 1], c[i]] = [c[i], c[i - 1]];
-          this._moveOpen(i, i - 1);
-          this._emit();
-          this._render();
-        }, i === 0),
-        this._button("↓", () => {
-          const c = cfg.chips;
-          [c[i + 1], c[i]] = [c[i], c[i + 1]];
-          this._moveOpen(i, i + 1);
-          this._emit();
-          this._render();
-        }, i === cfg.chips.length - 1),
-        this._button("✕", () => {
-          cfg.chips.splice(i, 1);
-          this._open.splice(i, 1);
-          this._emit();
-          this._render();
-        }),
-      ];
+    this._heading(
+      root,
+      "Tabs",
+      cfg.chips.length
+        ? "Each tab matches a device type."
+        : "No tabs configured: the domains found in the selected areas are used automatically."
+    );
 
-      let box;
-      let titleEl;
-
-      if (usePanel) {
-        box = document.createElement("ha-expansion-panel");
-        box.outlined = true;
-        box.header = title;
-        box.expanded = !!this._open[i];
-        box.addEventListener("expanded-changed", (ev) => {
-          this._open[i] = !!ev.detail.expanded;
-        });
-        const icons = document.createElement("div");
-        icons.slot = "icons";
-        icons.className = "panel-icons";
-        buttons.forEach((b) => {
-          b.addEventListener("click", (ev) => ev.stopPropagation());
-          icons.appendChild(b);
-        });
-        box.appendChild(icons);
-        titleEl = { set textContent(value) { box.header = value; } };
-      } else {
-        box = document.createElement("div");
-        box.className = "chip-box";
-        const head = document.createElement("div");
-        head.className = "chip-head";
-        titleEl = document.createElement("span");
-        titleEl.textContent = title;
-        const spacer = document.createElement("span");
-        spacer.className = "spacer";
-        head.appendChild(titleEl);
-        head.appendChild(spacer);
-        buttons.forEach((b) => head.appendChild(b));
-        box.appendChild(head);
-      }
-
-      box.appendChild(
-        this._makeForm(
-          {
-            domain: chip.domain || "",
-            device_class: chip.device_class || "",
-            labels: chip.labels || (chip.label ? [chip.label] : []),
-            name: chip.name || "",
-            icon: chip.icon || "",
-          },
-          CHIP_SCHEMA,
-          (value) => {
-            const next = {};
-            if (value.domain) next.domain = value.domain;
-            if (value.device_class) next.device_class = value.device_class;
-            if (value.labels && value.labels.length) next.labels = value.labels;
-            if (value.name) next.name = value.name;
-            if (value.icon) next.icon = value.icon;
-            cfg.chips[i] = next;
-            titleEl.textContent = this._chipTitle(next, i);
-            this._emit();
-          }
-        )
-      );
-
-      root.appendChild(box);
+    this._panelList(root, {
+      items: cfg.chips,
+      open: this._open,
+      schema: CHIP_SCHEMA,
+      title: (chip, i) => this._chipTitle(chip, i),
+      data: (chip) => ({
+        domain: chip.domain || "",
+        device_class: chip.device_class || "",
+        labels: chip.labels || (chip.label ? [chip.label] : []),
+        name: chip.name || "",
+        icon: chip.icon || "",
+      }),
+      apply: (value) => {
+        const next = {};
+        if (value.domain) next.domain = value.domain;
+        if (value.device_class) next.device_class = value.device_class;
+        if (value.labels && value.labels.length) next.labels = value.labels;
+        if (value.name) next.name = value.name;
+        if (value.icon) next.icon = value.icon;
+        return next;
+      },
     });
 
     const addRow = document.createElement("div");
