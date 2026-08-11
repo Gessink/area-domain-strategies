@@ -333,7 +333,7 @@ Group helpers expose their members in the `entity_id` attribute. `groups` decide
 
 A group that `auto` or `strict` dropped from the list is not thrown away: if it **covers the whole section**, it comes back on top as a **full width** card, above the individual devices. So an area with a "Slaapkamer lampen" group gets that group as a master control across the section, with the individual lamps in two columns below it, and the group is never counted twice.
 
-Covering means every device shown in that section is a member of the group, unavailable ones included. A group over half the lamps is not a master control, so it stays out, and under `auto` it was already dropped from the list, so it simply does not appear.
+Covering means every device shown in that section is a member of the group, unavailable ones included. Groups inside groups count: a bedroom group that lists a nightstand group rather than the two lamps in it still covers them, because membership is followed all the way down. A group over half the lamps is not a master control, so it stays out, and under `auto` it was already dropped from the list, so it simply does not appear.
 
 At most one group gets the spot. When several cover the section, the tightest one wins, so a per-area group beats a house-wide one. With combined areas a group only qualifies if it covers the devices of every area in the merged section.
 

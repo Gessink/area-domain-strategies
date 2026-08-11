@@ -18,7 +18,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.5.1";
+const VERSION = "1.5.2";
 
 /* ================================================================== *
  * Shared core
@@ -102,6 +102,26 @@ function isUnavailable(stateObj) {
 function groupMembers(stateObj) {
   const attrs = stateObj.attributes || {};
   return Array.isArray(attrs.entity_id) ? attrs.entity_id : null;
+}
+
+// Groups hold groups: a bedroom group can list a nightstand group rather than
+// the two lamps in it. Walking through gives everything it really controls.
+// The guard keeps a group that somehow contains itself from looping.
+function allGroupMembers(hass, entityId, seen) {
+  const guard = seen || new Set();
+  if (guard.has(entityId)) return [];
+  guard.add(entityId);
+
+  const stateObj = hass.states[entityId];
+  const members = stateObj ? groupMembers(stateObj) : null;
+  if (!members) return [];
+
+  const out = [];
+  members.forEach((member) => {
+    out.push(member);
+    allGroupMembers(hass, member, guard).forEach((nested) => out.push(nested));
+  });
+  return out;
 }
 
 function asArray(value) {
@@ -368,9 +388,15 @@ function candidates(hass, cfg, chip) {
 
   const present = new Set(ids);
   return ids.filter((id) => {
-    const members = groupMembers(hass.states[id]);
-    if (!members || !members.length) return true;
+    if (!groupMembers(hass.states[id])) return true;
     if (groups === "exclude") return false;
+
+    // Judge on everything the group reaches. A group whose only member is
+    // another group would otherwise look like it controls nothing that is
+    // listed, and survive as a tile among the very lamps it switches.
+    const members = allGroupMembers(hass, id);
+    if (!members.length) return true;
+
     if (groups === "strict") {
       return !members.every((m) => memberNotBlocking(hass, cfg, chip, m, present));
     }
@@ -682,15 +708,23 @@ function sectionEntities(hass, cfg, chip) {
   if (items.length < 2) return { headers: [], items };
 
   const withGroups = candidates(hass, Object.assign({}, cfg, { groups: "include" }), chip);
+  // Coverage is judged on everything a group reaches, nested groups included,
+  // so a bedroom group listing a nightstand group still covers both lamps.
+  const reach = {};
+  const reachOf = (id) => {
+    if (!reach[id]) reach[id] = allGroupMembers(hass, id);
+    return reach[id];
+  };
+
   const covering = withGroups
     .filter((id) => {
       if (keptSet.has(id)) return false;
-      const members = groupMembers(hass.states[id]);
-      if (!members || !members.length) return false;
+      const members = reachOf(id);
+      if (!members.length) return false;
       const memberSet = new Set(members);
       return items.every((item) => memberSet.has(item));
     })
-    .sort((a, b) => groupMembers(hass.states[a]).length - groupMembers(hass.states[b]).length);
+    .sort((a, b) => reachOf(a).length - reachOf(b).length);
 
   return { headers: covering.slice(0, 1), items };
 }
