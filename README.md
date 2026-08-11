@@ -92,9 +92,9 @@ views:
 | Covers | Covers and valves |
 | Climate | Thermostat cards for climate and water heaters |
 | Media | Media players |
+| Sensors | Temperature, humidity and air pressure, as sensor cards with a graph |
 | Security | Alarm panels, locks, and the binary sensors that watch doors, windows, motion, smoke, gas, water and tampering |
 | Other devices | Switches, fans, vacuums, mowers, sirens, humidifiers, remotes |
-| Sensors | Temperature, humidity and air pressure, as sensor cards with a graph |
 | Other | The catch-all: anything in the room the sections above did not take |
 
 Sections with nothing in them are left out. The counters on top show active of total, so `0/7 aan` tells you there are seven lamps and none are on.
@@ -103,16 +103,19 @@ The catch-all is what keeps this maintainable: buy a device in a domain nobody t
 
 ### Naming the view
 
+The tab at the top of a dashboard is drawn from the **raw** view entry, before any strategy runs, so a `title` inside the `strategy:` block never reaches it. Home Assistant's own strategy documentation shows it in there, which is misleading. Put it one level up, next to `strategy:`:
+
 ```yaml
-strategy:
-  type: custom:area-domain-room
-  areas: [living_room]
-  title: Woonkamer          # default: the names of the areas, joined
-  icon: mdi:sofa            # default: the icon of the first area
-  path: woonkamer           # optional, for the URL
+views:
+  - title: Woonkamer
+    icon: mdi:sofa
+    path: woonkamer
+    strategy:
+      type: custom:area-domain-room
+      areas: [living_room]
 ```
 
-`title: false` and `icon: false` leave them off entirely.
+Used as a dashboard strategy the generated views *are* the config, so there `title`, `icon` and `path` on the strategy do work, and they default to the names of the areas and the icon of the first one. `title: false` and `icon: false` leave them off.
 
 ### Sensors
 

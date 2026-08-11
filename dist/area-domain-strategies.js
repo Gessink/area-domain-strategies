@@ -18,7 +18,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.5.0";
+const VERSION = "1.5.1";
 
 /* ================================================================== *
  * Shared core
@@ -439,6 +439,26 @@ const MEDIA_VOLUME_SET = 4;
 const VACUUM_CLEAN_AREA = 16384;
 
 const BRIGHTNESS_MODES = ["brightness", "color_temp", "hs", "xy", "rgb", "rgbw", "rgbww", "white"];
+
+/* ------------------------------------------------------------------ *
+ * Colours
+ *
+ * Same values as Home Assistant's own colour picker: a theme colour name or
+ * any CSS colour. Kept in step with area-domain-chips.
+ * ------------------------------------------------------------------ */
+
+const THEME_COLORS = [
+  "primary", "accent", "red", "pink", "purple", "deep-purple", "indigo",
+  "blue", "light-blue", "cyan", "teal", "green", "light-green", "lime",
+  "yellow", "amber", "orange", "deep-orange", "brown", "light-grey", "grey",
+  "dark-grey", "blue-grey", "black", "white", "disabled",
+];
+
+function resolveColor(color) {
+  if (!color || color === "none") return "var(--primary-text-color)";
+  if (THEME_COLORS.includes(color)) return `var(--${color}-color)`;
+  return color;
+}
 
 // Relevant controls per domain, derived from what the entity actually supports.
 function featuresFor(stateObj) {
@@ -1523,6 +1543,7 @@ const DEFAULT_ROOM_SECTIONS = [
   { key: "cover", domains: ["cover", "valve"] },
   { key: "climate", domains: ["climate", "water_heater"], card: "thermostat" },
   { key: "media_player", domain: "media_player" },
+  { key: "sensor", domain: "sensor", device_classes: COMMON_SENSOR_CLASSES, card: "sensor" },
   {
     key: "security",
     domains: ["alarm_control_panel", "lock", "binary_sensor"],
@@ -1530,7 +1551,6 @@ const DEFAULT_ROOM_SECTIONS = [
     device_class_exempt_domains: ANY_DEVICE_CLASS_DOMAINS,
   },
   { key: "other", domains: ["switch", "fan", "vacuum", "lawn_mower", "siren", "humidifier", "remote"] },
-  { key: "sensor", domain: "sensor", device_classes: COMMON_SENSOR_CLASSES, card: "sensor" },
   { key: "rest", rest: true },
 ];
 
