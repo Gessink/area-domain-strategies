@@ -18,7 +18,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.3.0";
+const VERSION = "1.4.0";
 
 /* ================================================================== *
  * Shared core
@@ -1166,7 +1166,13 @@ class AreaDomainTabChips extends HTMLElement {
 
       el.appendChild(icon);
       el.appendChild(labels);
-      el.addEventListener("click", () => this._select(tab.slug));
+      // The room view uses these as counters, not as tabs.
+      if (this._config.navigate === false) {
+        el.classList.add("static");
+        el.disabled = true;
+      } else {
+        el.addEventListener("click", () => this._select(tab.slug));
+      }
 
       wrap.appendChild(el);
       return { el, value, tab };
@@ -1187,7 +1193,9 @@ class AreaDomainTabChips extends HTMLElement {
       const ids = candidates(hass, cfg, chip);
       const on = filterByMode(hass, chip, ids, "active").length;
       const word = chipStateWord(hass, chip);
-      return word ? `${on} ${word}` : String(on);
+      // `0/7 on` says more than `0 on`: it also tells you there are seven.
+      const number = cfg.show_total ? `${on}/${ids.length}` : String(on);
+      return word ? `${number} ${word}` : number;
     });
 
     const key = `${active}|${counts.join(",")}`;
@@ -1195,7 +1203,7 @@ class AreaDomainTabChips extends HTMLElement {
     this._lastRender = key;
 
     this._chipEls.forEach((parts, i) => {
-      parts.el.classList.toggle("active", parts.tab.slug === active);
+      parts.el.classList.toggle("active", cfg.navigate !== false && parts.tab.slug === active);
       parts.value.textContent = counts[i];
     });
   }
@@ -1223,6 +1231,8 @@ const CHIP_STYLES = `
     -webkit-tap-highlight-color: transparent;
   }
   .chip:hover { background: var(--secondary-background-color, rgba(0, 0, 0, 0.04)); }
+  .chip.static { cursor: default; }
+  .chip.static:hover { background: var(--ha-card-background, var(--card-background-color, #fff)); }
   .chip:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
   .chip.active {
     border-color: var(--primary-color);
@@ -1242,6 +1252,353 @@ const CHIP_STYLES = `
 `;
 
 customElements.define("area-domain-tab-chips", AreaDomainTabChips);
+
+/* ================================================================== *
+ * Room view strategy: custom:area-domain-room
+ *
+ * One area, or a combined set of areas, laid out as a native sections view
+ * with a section per kind of device. The shortcuts section comes first, the
+ * catch-all last, so a device in a domain nobody thought of still shows up.
+ * ================================================================== */
+
+// Headings Home Assistant has no translation for. Everything else asks hass.
+const SECTION_TITLES = {
+  shortcuts: { en: "Shortcuts", nl: "Snelkoppelingen", de: "Verknüpfungen", fr: "Raccourcis" },
+  other: { en: "Other devices", nl: "Andere apparaten", de: "Andere Geräte", fr: "Autres appareils" },
+  rest: { en: "Other", nl: "Overig", de: "Sonstiges", fr: "Autre" },
+};
+
+function builtinTitle(hass, key) {
+  const entry = SECTION_TITLES[key];
+  if (!entry) return "";
+  const lang = ((hass && hass.language) || "en").slice(0, 2);
+  return entry[lang] || entry.en;
+}
+
+const DEFAULT_ROOM_SECTIONS = [
+  { key: "shortcuts" },
+  { key: "light", domain: "light" },
+  { key: "cover", domains: ["cover", "valve"] },
+  { key: "climate", domains: ["climate", "water_heater"], card: "thermostat" },
+  { key: "media_player", domain: "media_player" },
+  { key: "other", domains: ["switch", "fan", "vacuum", "lock", "lawn_mower", "siren", "humidifier", "remote"] },
+  { key: "sensor", domains: ["sensor", "binary_sensor"], vertical: true },
+  { key: "rest", rest: true },
+];
+
+// Domains that are not devices, so the catch-all leaves them alone.
+const REST_EXCLUDED_DOMAINS = [
+  "scene", "script", "automation", "person", "device_tracker", "zone", "sun",
+  "todo", "calendar", "tag", "event", "conversation", "stt", "tts", "image",
+  "update", "input_boolean", "input_select", "input_number", "input_text",
+  "input_datetime", "input_button", "timer", "counter", "schedule",
+];
+
+// `{ rest: true }` written by hand carries no key, so derive one.
+function sectionKey(entry) {
+  return entry.key || (entry.rest ? "rest" : undefined);
+}
+
+function sectionHeading(hass, entry) {
+  if (entry.title !== undefined) return entry.title;
+  const builtin = builtinTitle(hass, sectionKey(entry));
+  if (builtin) return builtin;
+  return chipName(hass, chipFromConfig(entry));
+}
+
+function sectionIcon(hass, entry) {
+  if (entry.icon !== undefined) return entry.icon;
+  const key = sectionKey(entry);
+  if (key === "shortcuts") return "mdi:gesture-tap-button";
+  if (key === "rest") return "mdi:shape-outline";
+  return chipIcon(chipFromConfig(entry));
+}
+
+/* -------------------- shortcuts -------------------- */
+
+function serviceButton(name, icon, service, target) {
+  return {
+    type: "button",
+    name,
+    icon,
+    show_state: false,
+    tap_action: { action: "perform-action", perform_action: service, target },
+  };
+}
+
+function customButton(button) {
+  const card = {
+    type: "button",
+    show_state: !!button.show_state,
+  };
+  if (button.name !== undefined) card.name = button.name;
+  if (button.icon) card.icon = button.icon;
+  if (button.entity) card.entity = button.entity;
+
+  const action = button.tap_action || button.action;
+  if (action) {
+    card.tap_action = action;
+  } else if (button.service || button.perform_action) {
+    card.tap_action = {
+      action: "perform-action",
+      perform_action: button.perform_action || button.service,
+      target: button.target,
+      data: button.data,
+    };
+  } else if (button.entity) {
+    card.tap_action = { action: "toggle" };
+  }
+  if (button.hold_action) card.hold_action = button.hold_action;
+  return card;
+}
+
+// The scenes assigned to these areas, in name order.
+function areaScenes(hass, cfg, areas) {
+  const ids = Object.keys(hass.states).filter((id) => {
+    if (id.split(".")[0] !== "scene") return false;
+    const reg = hass.entities ? hass.entities[id] : undefined;
+    if (reg && !cfg.include_hidden && reg.hidden) return false;
+    const areaId = entityAreaId(hass, id);
+    return !!areaId && areas.includes(areaId);
+  });
+  return ids.sort((a, b) => friendlyName(hass, a).localeCompare(friendlyName(hass, b)));
+}
+
+function shortcutCards(hass, cfg, entry, areas) {
+  const scoped = Object.assign({}, cfg, { areas });
+  const cards = [];
+  const used = [];
+  const wanted = Array.isArray(entry.buttons) && entry.buttons.length
+    ? entry.buttons
+    : ["lights_off", "vacuum", "scenes"];
+
+  wanted.forEach((button) => {
+    if (typeof button !== "string") {
+      cards.push(button.card ? button.card : customButton(button));
+      if (button.entity) used.push(button.entity);
+      return;
+    }
+
+    if (button === "lights_off") {
+      if (!candidates(hass, scoped, { domain: "light" }).length) return;
+      const name = `${chipName(hass, { domain: "light" })} ${lowerFirst(hass, stateName(hass, "light", undefined, "off"))}`;
+      cards.push(serviceButton(name, "mdi:lightbulb-off", "light.turn_off", { area_id: areas }));
+      return;
+    }
+
+    if (button === "vacuum") {
+      const vacuums = candidates(hass, scoped, { domain: "vacuum" });
+      if (!vacuums.length) return;
+      const name = tr(hass, "ui.card.vacuum.actions.start_cleaning") || "Start cleaning";
+      cards.push(serviceButton(name, "mdi:robot-vacuum", "vacuum.start", { entity_id: vacuums }));
+      return;
+    }
+
+    if (button === "scenes") {
+      areaScenes(hass, cfg, areas).forEach((id) => {
+        cards.push({ type: "button", entity: id, show_state: false, tap_action: { action: "toggle" } });
+        used.push(id);
+      });
+    }
+  });
+
+  return { cards, used };
+}
+
+/* -------------------- sections -------------------- */
+
+function roomSectionCards(hass, cfg, entry, areas) {
+  const chip = chipFromConfig(entry);
+  const scoped = Object.assign({}, cfg, entry, { areas, chip });
+  const { headers, items } = sectionEntities(hass, scoped, chip);
+  const tileColumns = entry.tile_columns || cfg.tile_columns || 6;
+  const cards = [];
+  const used = headers.concat(items);
+
+  const tileFor = (id, fullWidth) => {
+    const card = tileCard(hass, id, scoped.features);
+    if (entry.vertical) card.vertical = true;
+    card.grid_options = { columns: fullWidth ? "full" : tileColumns };
+    return card;
+  };
+
+  // A thermostat card says more than a tile with a temperature row, and it is
+  // what a climate section is usually for.
+  if (entry.card === "thermostat" || entry.card === "humidifier") {
+    headers.concat(items).forEach((id) => {
+      cards.push({ type: entry.card, entity: id, grid_options: { columns: "full" } });
+    });
+    return { cards, used };
+  }
+
+  headers.forEach((id) => cards.push(tileFor(id, true)));
+  items.forEach((id) => cards.push(tileFor(id, false)));
+  return { cards, used };
+}
+
+function restCards(hass, cfg, entry, areas, claimed) {
+  const excluded = new Set(asArray(entry.exclude_domains).length
+    ? asArray(entry.exclude_domains)
+    : REST_EXCLUDED_DOMAINS);
+  const scoped = Object.assign({}, cfg, { areas });
+  const ids = candidates(hass, scoped, {}).filter(
+    (id) => !claimed.has(id) && !excluded.has(id.split(".")[0])
+  );
+
+  const tileColumns = entry.tile_columns || cfg.tile_columns || 6;
+  return sortEntities(hass, ids, scoped).map((id) => {
+    const card = tileCard(hass, id, scoped.features);
+    if (entry.vertical) card.vertical = true;
+    card.grid_options = { columns: tileColumns };
+    return card;
+  });
+}
+
+function buildRoomView(config, hass) {
+  const cfg = Object.assign(
+    {
+      columns: 3,
+      tile_columns: 6,
+      groups: "auto",
+      groups_first: true,
+      features: true,
+      mode: "all",
+      badges: true,
+      show_total: true,
+      hide_empty_sections: true,
+    },
+    config || {}
+  );
+
+  const areas = resolveAreas(hass, cfg);
+  const entries = Array.isArray(cfg.sections) && cfg.sections.length ? cfg.sections : DEFAULT_ROOM_SECTIONS;
+
+  const claimed = new Set();
+  const sections = [];
+  let restSlot = -1;
+  let restEntry = null;
+
+  entries.forEach((entry) => {
+    // A literal section is passed straight through, so hand-built cards keep
+    // their place between the generated ones.
+    if (entry.section) {
+      sections.push(entry.section);
+      return;
+    }
+
+    if (entry.rest) {
+      restSlot = sections.length;
+      restEntry = entry;
+      sections.push(null);
+      return;
+    }
+
+    const heading = {
+      type: "heading",
+      heading: sectionHeading(hass, entry),
+      heading_style: entry.heading_style || "title",
+      icon: sectionIcon(hass, entry),
+    };
+
+    let cards;
+    if (entry.key === "shortcuts") {
+      const result = shortcutCards(hass, cfg, entry, areas);
+      result.used.forEach((id) => claimed.add(id));
+      cards = result.cards.map((card) =>
+        Object.assign({ grid_options: { columns: entry.button_columns || 3 } }, card)
+      );
+    } else {
+      const result = roomSectionCards(hass, cfg, entry, areas);
+      result.used.forEach((id) => claimed.add(id));
+      cards = result.cards;
+    }
+
+    if (!cards.length && cfg.hide_empty_sections !== false) return;
+    sections.push({ type: "grid", cards: [heading].concat(cards) });
+  });
+
+  // The catch-all runs last whatever its position, then drops into its slot.
+  if (restSlot >= 0) {
+    const cards = restCards(hass, cfg, restEntry, areas, claimed);
+    if (!cards.length && cfg.hide_empty_sections !== false) {
+      sections.splice(restSlot, 1);
+    } else {
+      sections[restSlot] = {
+        type: "grid",
+        cards: [
+          {
+            type: "heading",
+            heading: sectionHeading(hass, restEntry),
+            heading_style: restEntry.heading_style || "title",
+            icon: sectionIcon(hass, restEntry),
+          },
+        ].concat(cards),
+      };
+    }
+  }
+
+  const view = {
+    type: "sections",
+    max_columns: cfg.columns,
+    sections,
+  };
+
+  if (cfg.badges !== false) {
+    const tabs = entries
+      .filter((entry) => !entry.section && !entry.rest && entry.key !== "shortcuts")
+      .map((entry, i) => ({
+        slug: chipSlug(chipFromConfig(entry), i),
+        name: sectionHeading(hass, entry),
+        icon: sectionIcon(hass, entry),
+        chip: chipFromConfig(entry),
+      }));
+
+    const badge = Object.assign({}, cfg, {
+      type: "custom:area-domain-tab-chips",
+      tabs,
+      navigate: false,
+      show_total: cfg.show_total !== false,
+    });
+    delete badge.sections;
+    view.badges = [badge];
+  }
+
+  if (areas.length) view.title = areas.map((id) => areaName(hass, id)).join(" + ");
+  return view;
+}
+
+class AreaDomainRoomStrategy {
+  static async generate(config, hass) {
+    return buildRoomView(config, hass);
+  }
+
+  static async generateView(info) {
+    return buildRoomView(info.config, info.hass);
+  }
+
+  static async getConfigElement() {
+    return document.createElement("area-domain-room-strategy-editor");
+  }
+}
+
+customElements.define("ll-strategy-view-area-domain-room", AreaDomainRoomStrategy);
+
+// Same page as a dashboard strategy, which is the route that gets a UI editor.
+class AreaDomainRoomDashboardStrategy {
+  static async generate(config, hass) {
+    return { views: [buildRoomView(config, hass)] };
+  }
+
+  static async generateDashboard(info) {
+    return { views: [buildRoomView(info.config, info.hass)] };
+  }
+
+  static async getConfigElement() {
+    return document.createElement("area-domain-room-strategy-editor");
+  }
+}
+
+customElements.define("ll-strategy-dashboard-area-domain-room", AreaDomainRoomDashboardStrategy);
 
 /* ================================================================== *
  * Editors
@@ -1904,6 +2261,250 @@ class AreaDomainTabsEditor extends BaseEditor {
 }
 
 customElements.define("area-domain-tabs-strategy-editor", AreaDomainTabsEditor);
+
+/* -------------------- room strategy editor -------------------- */
+
+const ROOM_SCHEMA = [
+  { name: "areas", selector: { area: { multiple: true } } },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "columns", selector: { number: { min: 1, max: 6, mode: "box" } } },
+      { name: "tile_columns", selector: { number: { min: 1, max: 12, mode: "box" } } },
+    ],
+  },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "badges", selector: { boolean: {} } },
+      { name: "show_total", selector: { boolean: {} } },
+    ],
+  },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "features", selector: { boolean: {} } },
+      { name: "group_header", selector: { boolean: {} } },
+    ],
+  },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "sort_by_height", selector: { boolean: {} } },
+      { name: "hide_empty_sections", selector: { boolean: {} } },
+    ],
+  },
+  { name: "groups", selector: GROUPS_SELECTOR },
+  { name: "exclude_keywords", selector: { text: { multiple: true } } },
+  { name: "include_keywords", selector: { text: { multiple: true } } },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "include_hidden", selector: { boolean: {} } },
+      { name: "include_diagnostic", selector: { boolean: {} } },
+    ],
+  },
+];
+
+const ROOM_SECTION_SCHEMA = [
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "title", selector: { text: {} } },
+      { name: "icon", selector: { icon: {} } },
+    ],
+  },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "domain", selector: DOMAIN_SELECTOR },
+      { name: "device_class", selector: { text: {} } },
+    ],
+  },
+  { name: "labels", selector: { label: { multiple: true } } },
+  { name: "entities", selector: { entity: { multiple: true } } },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      {
+        name: "card",
+        selector: {
+          select: {
+            mode: "dropdown",
+            options: [
+              { value: "tile", label: "Tile cards" },
+              { value: "thermostat", label: "Thermostat cards" },
+              { value: "humidifier", label: "Humidifier cards" },
+            ],
+          },
+        },
+      },
+      { name: "tile_columns", selector: { number: { min: 1, max: 12, mode: "box" } } },
+    ],
+  },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "vertical", selector: { boolean: {} } },
+      { name: "rest", selector: { boolean: {} } },
+    ],
+  },
+];
+
+Object.assign(LABELS, {
+  badges: "Show the counters on top",
+  show_total: "Count as active of total, e.g. 0/7",
+  hide_empty_sections: "Hide sections with nothing in them",
+  vertical: "Stack icon above name",
+  rest: "Catch-all: everything not in an earlier section",
+  card: "Card type",
+  entities: "Entities (empty = everything that matches)",
+});
+
+class AreaDomainRoomEditor extends BaseEditor {
+  constructor() {
+    super();
+    this._open = [];
+  }
+
+  _prepare() {
+    if (!Array.isArray(this._config.sections)) this._config.sections = [];
+    this._open.length = this._config.sections.length;
+  }
+
+  _sectionTitle(entry, i) {
+    if (entry.section) return entry.title || `Own section ${i + 1}`;
+    if (entry.title) return entry.title;
+    if (this._hass) {
+      const builtin = builtinTitle(this._hass, sectionKey(entry));
+      if (builtin) return builtin;
+      if (entry.domain || entry.device_class) return chipName(this._hass, chipFromConfig(entry));
+    }
+    if (entry.rest) return "Catch-all";
+    return entry.key || `Section ${i + 1}`;
+  }
+
+  _render() {
+    const root = this._startRender();
+    const cfg = this._config;
+
+    root.appendChild(
+      this._makeForm(
+        {
+          areas: cfg.areas || [],
+          columns: cfg.columns || 3,
+          tile_columns: cfg.tile_columns || 6,
+          badges: cfg.badges !== false,
+          show_total: cfg.show_total !== false,
+          features: cfg.features !== false,
+          group_header: cfg.group_header !== false,
+          sort_by_height: cfg.sort_by_height !== false,
+          hide_empty_sections: cfg.hide_empty_sections !== false,
+          groups: cfg.groups || "auto",
+          exclude_keywords: cfg.exclude_keywords || [],
+          include_keywords: cfg.include_keywords || [],
+          include_hidden: !!cfg.include_hidden,
+          include_diagnostic: !!cfg.include_diagnostic,
+        },
+        ROOM_SCHEMA,
+        (value) => {
+          cfg.areas = value.areas || [];
+          cfg.columns = value.columns || 3;
+          cfg.tile_columns = value.tile_columns || 6;
+          cfg.badges = value.badges !== false;
+          cfg.show_total = value.show_total !== false;
+          cfg.features = value.features !== false;
+          cfg.group_header = value.group_header !== false;
+          cfg.sort_by_height = value.sort_by_height !== false;
+          cfg.hide_empty_sections = value.hide_empty_sections !== false;
+          cfg.groups = value.groups || "auto";
+          cfg.exclude_keywords = value.exclude_keywords || [];
+          cfg.include_keywords = value.include_keywords || [];
+          cfg.include_hidden = !!value.include_hidden;
+          cfg.include_diagnostic = !!value.include_diagnostic;
+          this._emit();
+        }
+      )
+    );
+
+    this._heading(
+      root,
+      "Sections",
+      cfg.sections.length
+        ? "In this order. A section with the catch-all switch collects whatever the others left."
+        : "Nothing configured, so the standard set is used: shortcuts, lights, covers, climate, media, other devices, sensors and a catch-all."
+    );
+
+    this._panelList(root, {
+      items: cfg.sections,
+      open: this._open,
+      schema: ROOM_SECTION_SCHEMA,
+      title: (entry, i) => this._sectionTitle(entry, i),
+      data: (entry) => ({
+        title: entry.title || "",
+        icon: entry.icon || "",
+        domain: entry.domain || "",
+        device_class: entry.device_class || "",
+        labels: entry.labels || [],
+        entities: entry.entities || [],
+        card: entry.card || "tile",
+        tile_columns: entry.tile_columns,
+        vertical: !!entry.vertical,
+        rest: !!entry.rest,
+      }),
+      apply: (value, entry) => {
+        // A hand-written `section:` keeps its cards; only its heading is edited.
+        const next = entry.section ? { section: entry.section } : {};
+        if (entry.key) next.key = entry.key;
+        if (value.title) next.title = value.title;
+        if (value.icon) next.icon = value.icon;
+        if (entry.section) return next;
+
+        if (value.domain) next.domain = value.domain;
+        if (value.device_class) next.device_class = value.device_class;
+        if (value.labels && value.labels.length) next.labels = value.labels;
+        if (value.entities && value.entities.length) next.entities = value.entities;
+        if (value.card && value.card !== "tile") next.card = value.card;
+        if (value.tile_columns) next.tile_columns = value.tile_columns;
+        if (value.vertical) next.vertical = true;
+        if (value.rest) next.rest = true;
+        return next;
+      },
+    });
+
+    const addRow = document.createElement("div");
+    addRow.className = "add-row";
+    addRow.appendChild(
+      this._button("+ Add section", () => {
+        cfg.sections.push({ domain: "light" });
+        this._open[cfg.sections.length - 1] = true;
+        this._emit();
+        this._render();
+      })
+    );
+    if (!cfg.sections.length) {
+      addRow.appendChild(
+        this._button("+ Start from the standard set", () => {
+          cfg.sections = JSON.parse(JSON.stringify(DEFAULT_ROOM_SECTIONS));
+          this._emit();
+          this._render();
+        })
+      );
+    }
+    root.appendChild(addRow);
+  }
+}
+
+customElements.define("area-domain-room-strategy-editor", AreaDomainRoomEditor);
 
 /* ================================================================== *
  * Registration

@@ -9,6 +9,7 @@ Everything they produce is a **native sections view**, so Home Assistant does th
 - **`custom:area-domain-section`** generates one grid section: a device type across one or more areas, heading first, then a tile card per entity. Groups lead the list.
 - **`custom:area-domain-areas`** generates a sections view: one section per area for a single device type.
 - **`custom:area-domain-tabs`** generates one sections view with a chip per device type on top. Clicking a chip swaps what every section shows, through the URL hash.
+- **`custom:area-domain-room`** generates a page for one room, or a combined set of rooms, with a section per kind of device: shortcuts, lights, covers, climate, media, other devices, sensors, and a catch-all that picks up whatever is left.
 
 All three have a visual editor.
 
@@ -72,6 +73,91 @@ strategy:
 ```
 
 Areas you leave out of `area_groups` keep a section of their own. A combined section takes the place of the first of its areas, so the order in `areas` still decides the layout. Works the same way on the areas view strategy.
+
+## Room view
+
+A page for one room. Everything below is the default, so this on its own is a working room page:
+
+```yaml
+views:
+  - strategy:
+      type: custom:area-domain-room
+      areas: [living_room]
+```
+
+| Section | Contents |
+| --- | --- |
+| Shortcuts | A button to turn every light in the room off, one to send the vacuum, and the scenes assigned to the room |
+| Lights | The covering group full width, then the lamps |
+| Covers | Covers and valves |
+| Climate | Thermostat cards for climate and water heaters |
+| Media | Media players |
+| Other devices | Switches, fans, vacuums, locks, mowers, sirens, humidifiers, remotes |
+| Sensors | Sensors and binary sensors, as vertical tiles |
+| Other | The catch-all: anything in the room the sections above did not take |
+
+Sections with nothing in them are left out. The counters on top show active of total, so `0/7 aan` tells you there are seven lamps and none are on.
+
+The catch-all is what keeps this maintainable: buy a device in a domain nobody thought of and it appears by itself instead of quietly going missing. It skips things that are not devices, scenes and scripts and automations and the like; override that with `exclude_domains` on the catch-all entry.
+
+### Your own sections
+
+`sections` replaces the default list. Each entry is either a generated section or one of your own, and they keep the order you write them in:
+
+```yaml
+strategy:
+  type: custom:area-domain-room
+  areas: [living_room]
+  sections:
+    - section:                       # passed through untouched
+        type: grid
+        cards:
+          - type: button
+            name: Bioscoop
+            icon: mdi:movie-open
+            tap_action: { action: perform-action, perform_action: script.cinema }
+    - key: shortcuts
+      buttons:
+        - lights_off                 # the built-ins, in the order you want
+        - scenes
+        - name: Film                 # or your own, with icon and action
+          icon: mdi:movie
+          service: script.film
+    - domain: light
+      title: Verlichting             # override the heading
+    - domain: climate
+      card: thermostat
+    - domain: sensor
+      vertical: true
+      tile_columns: 4                # three per row
+    - labels: [favoriet]             # any matcher the other strategies take
+      title: Favorieten
+    - rest: true
+```
+
+| Section option | Description |
+| --- | --- |
+| `section` | A section config passed through as-is. Only its position is managed. |
+| `key` | `shortcuts` for the shortcut buttons; otherwise just an identifier used for the badge. |
+| `title` / `icon` | Override the heading. Empty means the translated domain or device class name. |
+| `domain` / `domains`, `device_class`, `label` / `labels`, `entities` | What the section matches, the same keys as everywhere else. |
+| `card` | `tile` (default), `thermostat` or `humidifier`. |
+| `tile_columns` | Card width out of 12 for this section only. |
+| `vertical` | Stack the tile's icon above its name. |
+| `rest` | Make this the catch-all. It always runs last, wherever you put it. |
+| `buttons` | Shortcuts only. Strings `lights_off`, `vacuum`, `scenes`, or an object with `name`, `icon` and `tap_action` / `service` / `entity`. |
+
+The vacuum button calls `vacuum.start` on the vacuums in the room, which starts a full clean. For cleaning just this room, point a custom button at your own script:
+
+```yaml
+- key: shortcuts
+  buttons:
+    - lights_off
+    - name: Stofzuig hier
+      icon: mdi:robot-vacuum
+      service: script.clean_living_room
+    - scenes
+```
 
 ## Areas view
 
