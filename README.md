@@ -149,23 +149,27 @@ strategy:
 
 ### The vacuum button
 
-Home Assistant 2026.3 added [`vacuum.clean_area`][clean-area], which sends a robot to the areas you already have instead of to vendor segment numbers. The button uses it whenever a vacuum reports the `CLEAN_AREA` feature, wherever in the house that robot happens to dock, and passes this room as `cleaning_area_id`:
+Home Assistant 2026.3 added [`vacuum.clean_area`][clean-area], which sends a robot to the areas you already have instead of to vendor segment numbers.
+
+Nothing about this is configured. Every entity in the `vacuum` domain is checked for the `CLEAN_AREA` feature in its `supported_features`, and the ones that have it become the target, wherever in the house they happen to dock: a robot is rarely parked in the room you are sending it to. The room the page is about goes in as `cleaning_area_id`. So on a living room page with one capable robot the button ends up calling:
 
 ```yaml
 action: vacuum.clean_area
 target:
-  entity_id: vacuum.roborock
+  entity_id: <your capable vacuums, detected>
 data:
   cleaning_area_id: [living_room]
 ```
 
-Point it at one specific robot with `vacuum_entity` on the shortcuts entry. If nothing supports area cleaning, the button falls back to `vacuum.start` on the vacuums in the room, which is a full run; in that case a custom button aimed at your own script is the better answer:
+With more than one capable robot they all get the call. Pin it to one with `vacuum_entity` on the shortcuts entry:
 
 ```yaml
 - key: shortcuts
-  vacuum_entity: vacuum.roborock
+  vacuum_entity: vacuum.downstairs   # optional, only when you have several
   buttons: [lights_off, vacuum, scenes]
 ```
+
+If no vacuum supports area cleaning, the button falls back to `vacuum.start` on the vacuums in the room, which is a full run. In that case a custom button pointed at your own script is the better answer.
 
 [clean-area]: https://www.home-assistant.io/actions/vacuum.clean_area/
 
