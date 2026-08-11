@@ -88,6 +88,7 @@ views:
 | Section | Contents |
 | --- | --- |
 | Shortcuts | Coloured buttons: turn every light in the room off, send the vacuum to this room, and one per scene assigned to the room |
+| Laundry | A [WashData card][washdata-card] per WashData appliance in the room, when that card is installed |
 | Lights | The covering group full width, then the lamps |
 | Covers | Covers and valves |
 | Climate | Thermostat cards for climate and water heaters |
@@ -129,6 +130,21 @@ strategy:
 ```
 
 A sensor with no unit, or one whose state is not a number, falls back to a tile: there is nothing to graph.
+
+### Companion cards
+
+Some rooms deserve a card from another repository. A section can name one, and it appears only when that card is actually installed and the room actually has a device for it, so a room page never shows "custom element doesn't exist":
+
+```yaml
+- key: washdata
+  companion: washdata
+  card_options:
+    log: 3          # passed straight to the card
+```
+
+Right now `washdata` is the one on offer, for [WashData Card][washdata-card]: one card per WashData appliance in the room, full width. Installed is checked against the custom element and the card registry, the device against the entity registry's `platform`. With one appliance the heading is its name; with several it is the card's own name.
+
+It sits in the default set already, so a room with a washing machine gets it and every other room does not notice.
 
 ### Your own sections
 
@@ -377,3 +393,5 @@ MIT
 [chips]: https://github.com/Gessink/area-domain-chips
 [hacs-badge]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg
 [hacs-url]: https://github.com/hacs/integration
+
+[washdata-card]: https://github.com/Gessink/WashData-card

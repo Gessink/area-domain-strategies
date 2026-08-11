@@ -18,7 +18,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.5.2";
+const VERSION = "1.6.0";
 
 /* ================================================================== *
  * Shared core
@@ -1571,8 +1571,55 @@ const SECURITY_DEVICE_CLASSES = [
 // section has to match on domain OR device class rather than both.
 const ANY_DEVICE_CLASS_DOMAINS = ["alarm_control_panel", "lock"];
 
+/* -------------------- optional companion cards -------------------- */
+
+// Cards from other repositories that a room can use when they happen to be
+// installed. Nothing is emitted for one that is missing, so the page never
+// shows "custom element doesn't exist".
+const COMPANIONS = {
+  washdata: { card: "washdata-card", platform: "ha_washdata", icon: "mdi:washing-machine" },
+};
+
+// The name the companion card registered itself under, so the section heading
+// follows whatever that card calls itself.
+function companionName(name) {
+  const spec = COMPANIONS[name];
+  const listed = (window.customCards || []).find((entry) => entry && entry.type === spec.card);
+  return (listed && listed.name) || spec.card;
+}
+
+function companionInstalled(name) {
+  const spec = COMPANIONS[name];
+  if (!spec) return false;
+  if (typeof customElements !== "undefined" && customElements.get(spec.card)) return true;
+  // Resources load before a dashboard renders, but the element may not be
+  // upgraded yet when a strategy runs, so accept the card registry too.
+  const listed = window.customCards || [];
+  return listed.some((entry) => entry && entry.type === spec.card);
+}
+
+// Devices in these areas that belong to the companion's integration.
+function companionDevices(hass, cfg, name, areas) {
+  const spec = COMPANIONS[name];
+  if (!spec || !hass.entities) return [];
+  const scope = new Set(areas);
+  const found = [];
+
+  Object.keys(hass.entities).forEach((entityId) => {
+    const reg = hass.entities[entityId];
+    if (!reg || reg.platform !== spec.platform || !reg.device_id) return;
+    if (found.indexOf(reg.device_id) >= 0) return;
+    const areaId = entityAreaId(hass, entityId);
+    if (!areaId || !scope.has(areaId)) return;
+    found.push(reg.device_id);
+  });
+
+  return found;
+}
+
 const DEFAULT_ROOM_SECTIONS = [
   { key: "shortcuts" },
+  { key: "washdata", companion: "washdata" },
   { key: "light", domain: "light" },
   { key: "cover", domains: ["cover", "valve"] },
   { key: "climate", domains: ["climate", "water_heater"], card: "thermostat" },
@@ -1899,7 +1946,27 @@ function buildRoomView(config, hass) {
     };
 
     let cards;
-    if (entry.key === "shortcuts") {
+    if (entry.companion) {
+      if (!companionInstalled(entry.companion)) return;
+      const spec = COMPANIONS[entry.companion];
+      const devices = companionDevices(hass, cfg, entry.companion, areas);
+      cards = devices.map((deviceId) =>
+        Object.assign(
+          { type: `custom:${spec.card}`, device: deviceId },
+          entry.card_options || {},
+          { grid_options: { columns: entry.tile_columns || "full" } }
+        )
+      );
+      // One appliance names the section after itself; several fall back to the
+      // card's own name, so neither needs a translation here.
+      if (entry.title === undefined) {
+        const device = devices.length === 1 ? hass.devices[devices[0]] : undefined;
+        heading.heading = device
+          ? device.name_by_user || device.name
+          : companionName(entry.companion);
+      }
+      if (entry.icon === undefined) heading.icon = spec.icon;
+    } else if (entry.key === "shortcuts") {
       const result = shortcutCards(hass, cfg, entry, areas);
       result.used.forEach((id) => claimed.add(id));
       cards = result.cards.map((card) =>
@@ -1943,7 +2010,8 @@ function buildRoomView(config, hass) {
 
   if (cfg.badges !== false) {
     const tabs = entries
-      .filter((entry) => !entry.section && !entry.rest && entry.key !== "shortcuts")
+      // Only sections that match on something have a number worth showing.
+      .filter((entry) => !entry.section && !entry.rest && !entry.companion && entry.key !== "shortcuts")
       .map((entry, i) => ({
         slug: chipSlug(chipFromConfig(entry), i),
         name: sectionHeading(hass, entry),
