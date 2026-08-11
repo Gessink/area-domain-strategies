@@ -1,20 +1,24 @@
 /*
  * Area Domain Strategies
  * ----------------------
- * Two Home Assistant dashboard strategies built on the same area + domain +
- * label + device class matching as area-domain-chips:
+ * Home Assistant dashboard strategies built on the same area + domain + label
+ * + device class matching as area-domain-chips. Everything they produce is a
+ * native sections view, so Home Assistant owns the layout:
  *
- *   custom:area-domain-section   a native grid section for one device type
- *                                across one or more areas, groups first
+ *   custom:area-domain-section   a grid section for one device type across one
+ *                                or more areas, groups first
  *
- *   custom:area-domain-tabs      a page with a chip per device type at the top;
- *                                clicking a chip switches tabs through the URL
- *                                hash and each area shows only that device type
+ *   custom:area-domain-areas     a sections view with one section per area for
+ *                                a single device type
+ *
+ *   custom:area-domain-tabs      one such view with a chip per device type on
+ *                                top, switching what the sections show through
+ *                                the URL hash
  *
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 
 /* ================================================================== *
  * Shared core
@@ -254,7 +258,24 @@ function chipStateWord(hass, chip) {
   return lowerFirst(hass, stateName(hass, domain, deviceClass, states[0]));
 }
 
-// Stable id used in the URL hash and to key the tabs.
+// Keys that describe *what* to match, as opposed to where to look or how to
+// render it. A config that doubles as its own chip must hand over only these:
+// carrying `areas` along would override the per-area scoping the callers do.
+const CHIP_KEYS = [
+  "domain", "domains", "device_class", "device_classes", "label", "labels",
+  "label_match", "entities", "name", "icon", "active_states", "inactive_states",
+  "use_action", "state_text", "exclude_keywords", "include_keywords", "key",
+];
+
+function chipFromConfig(cfg) {
+  const chip = {};
+  CHIP_KEYS.forEach((key) => {
+    if (cfg[key] !== undefined) chip[key] = cfg[key];
+  });
+  return chip;
+}
+
+// Stable id used in the URL path and to key the tabs.
 function chipSlug(chip, index) {
   if (chip.key) return String(chip.key);
   const parts = [chipDomain(chip), chipDeviceClass(chip)].filter(Boolean);
@@ -549,7 +570,7 @@ function autoChips(hass, cfg) {
 
 function buildSection(config, hass) {
   const cfg = Object.assign({ groups: "auto", groups_first: true, mode: "all", features: true }, config || {});
-  const chip = cfg.chip || cfg;
+  const chip = cfg.chip || chipFromConfig(cfg);
   const areas = resolveAreas(hass, cfg);
 
   const ids = sortEntities(
@@ -591,340 +612,466 @@ class AreaDomainSectionStrategy {
   static async generateSection(info) {
     return buildSection(info.config, info.hass);
   }
+
+  static async getConfigElement() {
+    return document.createElement("area-domain-section-strategy-editor");
+  }
 }
 
 customElements.define("ll-strategy-section-area-domain-section", AreaDomainSectionStrategy);
 
 /* ================================================================== *
- * View strategy: custom:area-domain-tabs
+ * Areas view strategy: custom:area-domain-areas
+ *
+ * A native sections view: one section per area for a single device type.
  * ================================================================== */
 
-function buildView(config, hass) {
-  const cfg = Object.assign({}, config || {});
-  delete cfg.type;
+function areaSections(config, hass, chip) {
+  const cfg = config;
+  return resolveAreas(hass, cfg)
+    .map((areaId) =>
+      buildSection(
+        Object.assign({}, cfg, {
+          areas: [areaId],
+          chip,
+          title: areaName(hass, areaId),
+          icon: cfg.area_icons === false ? undefined : areaIcon(hass, areaId),
+        }),
+        hass
+      )
+    )
+    .filter((section) => section.cards.length || cfg.hide_empty_areas === false);
+}
+
+function buildAreasView(config, hass) {
+  const cfg = Object.assign({ columns: 3 }, config || {});
+  const chip = cfg.chip || chipFromConfig(cfg);
+  return {
+    type: "sections",
+    max_columns: cfg.columns,
+    sections: areaSections(cfg, hass, chip),
+  };
+}
+
+class AreaDomainAreasStrategy {
+  static async generate(config, hass) {
+    return buildAreasView(config, hass);
+  }
+
+  static async generateView(info) {
+    return buildAreasView(info.config, info.hass);
+  }
+
+  static async getConfigElement() {
+    return document.createElement("area-domain-areas-strategy-editor");
+  }
+}
+
+customElements.define("ll-strategy-view-area-domain-areas", AreaDomainAreasStrategy);
+
+/* ================================================================== *
+ * Tabs view strategy: custom:area-domain-tabs
+ *
+ * One native sections view, one section per area. Every card in it is wrapped
+ * in a hash card that only renders when the URL hash matches its device type,
+ * so switching tabs swaps the contents of the sections without leaving the
+ * view. Home Assistant still owns the layout: max_columns, the responsive
+ * column count and the 12 column section grid are all its own.
+ * ================================================================== */
+
+function hashCard(slug, isDefault, gridColumns, card) {
+  const wrapper = {
+    type: "custom:area-domain-hash-card",
+    hash: slug,
+    card,
+  };
+  if (isDefault) wrapper.default = true;
+  if (gridColumns !== undefined) wrapper.grid_options = { columns: gridColumns };
+  return wrapper;
+}
+
+function buildTabsView(config, hass) {
+  const cfg = Object.assign(
+    {
+      columns: 3,
+      tile_columns: 6,
+      hide_empty_areas: true,
+      show_counts: true,
+      groups: "auto",
+      groups_first: true,
+      features: true,
+      mode: "all",
+    },
+    config || {}
+  );
+
+  const chips = Array.isArray(cfg.chips) && cfg.chips.length ? cfg.chips : autoChips(hass, cfg);
+  const tabs = chips.map((chip, i) => ({
+    slug: chipSlug(chip, i),
+    name: chipName(hass, chip),
+    icon: chipIcon(chip),
+    chip,
+  }));
+
+  const sections = resolveAreas(hass, cfg)
+    .map((areaId) => {
+      const scoped = Object.assign({}, cfg, { areas: [areaId] });
+      const cards = [];
+
+      tabs.forEach((tab, i) => {
+        const ids = sortEntities(
+          hass,
+          filterByMode(hass, tab.chip, candidates(hass, scoped, tab.chip), cfg.mode),
+          cfg.groups_first
+        );
+        if (!ids.length) return;
+
+        cards.push(
+          hashCard(tab.slug, i === 0, "full", {
+            type: "heading",
+            heading: areaName(hass, areaId),
+            heading_style: "title",
+            icon: cfg.area_icons === false ? undefined : areaIcon(hass, areaId),
+          })
+        );
+        ids.forEach((id) => {
+          cards.push(hashCard(tab.slug, i === 0, cfg.tile_columns, tileCard(hass, id, cfg.features)));
+        });
+      });
+
+      return { type: "grid", cards };
+    })
+    .filter((section) => section.cards.length || cfg.hide_empty_areas === false);
+
+  const badge = Object.assign({}, cfg, {
+    type: "custom:area-domain-tab-chips",
+    tabs: tabs.map((t) => ({ slug: t.slug, name: t.name, icon: t.icon, chip: t.chip })),
+  });
+  delete badge.chips;
 
   return {
-    type: "panel",
-    cards: [Object.assign({ type: "custom:area-domain-tabs-card" }, cfg)],
+    type: "sections",
+    max_columns: cfg.columns,
+    badges: [badge],
+    sections,
   };
 }
 
 class AreaDomainTabsStrategy {
   static async generate(config, hass) {
-    return buildView(config, hass);
+    return buildTabsView(config, hass);
   }
 
   static async generateView(info) {
-    return buildView(info.config, info.hass);
+    return buildTabsView(info.config, info.hass);
+  }
+
+  static async getConfigElement() {
+    return document.createElement("area-domain-tabs-strategy-editor");
   }
 }
 
 customElements.define("ll-strategy-view-area-domain-tabs", AreaDomainTabsStrategy);
 
 /* ================================================================== *
- * The page card
+ * Hash plumbing
  *
- * Renders the tab chips and, per area, a heading plus real Home Assistant tile
- * cards. The active tab lives in the URL hash so it survives a reload and
- * works with the browser's back button.
+ * Home Assistant's own visibility conditions cover state, numeric_state,
+ * screen and user; there is no URL condition, so the hash has to be read by an
+ * element. The chips write it, the hash cards read it.
  * ================================================================== */
 
-class AreaDomainTabsCard extends HTMLElement {
+const hashListeners = new Set();
+let hashWired = false;
+
+function currentHash() {
+  return (window.location.hash || "").replace(/^#/, "");
+}
+
+function onHashChange(fn) {
+  hashListeners.add(fn);
+  if (!hashWired) {
+    window.addEventListener("hashchange", () => hashListeners.forEach((l) => l()));
+    hashWired = true;
+  }
+}
+
+function offHashChange(fn) {
+  hashListeners.delete(fn);
+}
+
+// A hidden element keeps its slot in the section grid, so the grid item Home
+// Assistant put around it has to collapse too. That means reaching one or two
+// steps into Home Assistant's own DOM. Every step is guarded: if the shape
+// changes, the worst case is a gap in the layout, not a broken page.
+function gridItemOf(el) {
+  const root = el.getRootNode();
+  const host = root && root.host ? root.host : null;
+  if (!host || host.tagName !== "HUI-CARD") return null;
+  const parent = host.parentElement;
+  if (parent && parent.classList && parent.classList.contains("card")) return parent;
+  return host;
+}
+
+// The section a card sits in, so an area with nothing on this tab can collapse
+// instead of leaving an empty column.
+function sectionOf(el) {
+  let node = el;
+  for (let i = 0; i < 6 && node; i++) {
+    const root = node.getRootNode();
+    node = root && root.host ? root.host : null;
+    if (node && node.tagName === "HUI-SECTION") return node;
+  }
+  return null;
+}
+
+// Hash cards report in per section so the section itself can be hidden when
+// none of its cards are showing.
+const sectionMembers = new WeakMap();
+
+function reportVisibility(sectionEl, card, visible) {
+  if (!sectionEl) return;
+  let members = sectionMembers.get(sectionEl);
+  if (!members) {
+    members = new Map();
+    sectionMembers.set(sectionEl, members);
+  }
+  members.set(card, visible);
+  const any = Array.from(members.values()).some(Boolean);
+  sectionEl.style.display = any ? "" : "none";
+}
+
+/* ================================================================== *
+ * The hash card
+ * ================================================================== */
+
+class AreaDomainHashCard extends HTMLElement {
   constructor() {
     super();
-    this.attachShadow({ mode: "open" });
     this._config = null;
     this._hass = null;
-    this._helpers = null;
-    this._chips = null;
-    this._active = null;
-    this._cards = [];
-    this._chipEls = [];
-    this._built = false;
-    this._onHashChange = () => this._applyHash();
-  }
-
-  static getStubConfig() {
-    return { type: "custom:area-domain-tabs-card" };
+    this._inner = null;
+    this._visible = null;
+    this._onHash = () => this._apply();
   }
 
   setConfig(config) {
-    if (!config || typeof config !== "object") throw new Error("Invalid configuration");
-    this._config = Object.assign(
-      {
-        areas: [],
-        exclude_areas: [],
-        exclude_entities: [],
-        exclude_keywords: [],
-        include_keywords: [],
-        groups: "auto",
-        groups_first: true,
-        include_hidden: false,
-        include_diagnostic: false,
-        features: true,
-        hide_empty_areas: true,
-        show_counts: true,
-        columns: 2,
-      },
-      config
-    );
-    this._chips = null;
-    this._active = null;
-    this._built = false;
-    if (this.isConnected) this._render();
-  }
-
-  getCardSize() {
-    return 12;
-  }
-
-  connectedCallback() {
-    window.addEventListener("hashchange", this._onHashChange);
-    if (this._config && !this._built) this._render();
-  }
-
-  disconnectedCallback() {
-    window.removeEventListener("hashchange", this._onHashChange);
+    if (!config || !config.card) throw new Error("`card` is required");
+    this._config = config;
+    if (this._inner) {
+      this._inner.remove();
+      this._inner = null;
+    }
+    this._visible = null;
+    if (this.isConnected) this._apply();
   }
 
   set hass(hass) {
-    const first = !this._hass;
     this._hass = hass;
-    if (!this._config) return;
-    if (first || !this._built) {
-      this._render();
-      return;
-    }
-    this._cards.forEach((card) => {
-      card.hass = hass;
-    });
-    this._updateChipCounts();
+    if (this._inner) this._inner.hass = hass;
   }
 
   get hass() {
     return this._hass;
   }
 
-  _resolveChips() {
-    if (this._chips) return this._chips;
-    const cfg = this._config;
-    const list = Array.isArray(cfg.chips) && cfg.chips.length ? cfg.chips : autoChips(this._hass, cfg);
-    this._chips = list.map((chip, i) => Object.assign({}, chip, { _slug: chipSlug(chip, i) }));
-    return this._chips;
+  getCardSize() {
+    return this._inner && this._inner.getCardSize ? this._inner.getCardSize() : 1;
   }
 
-  _hashSlug() {
-    const raw = (window.location.hash || "").replace(/^#/, "");
-    return raw ? decodeURIComponent(raw) : "";
+  connectedCallback() {
+    onHashChange(this._onHash);
+    this._apply();
   }
 
-  _applyHash() {
-    const chips = this._resolveChips();
-    if (!chips.length) return;
-    const wanted = this._hashSlug();
-    const found = chips.find((c) => c._slug === wanted);
-    const next = found ? found._slug : chips[0]._slug;
-    if (next === this._active) return;
-    this._active = next;
-    this._renderBody();
-    this._updateChipCounts();
+  disconnectedCallback() {
+    offHashChange(this._onHash);
   }
 
-  _selectTab(slug) {
-    if (window.location.hash.replace(/^#/, "") === slug) {
-      // Same tab: nothing to do, but keep the hash canonical.
-      return;
+  _matches() {
+    const hash = currentHash();
+    if (!hash) return !!this._config.default;
+    return hash === this._config.hash;
+  }
+
+  async _apply() {
+    if (!this._config) return;
+    const visible = this._matches();
+    if (visible === this._visible) return;
+    this._visible = visible;
+
+    if (visible && !this._inner) {
+      const helpers = window.loadCardHelpers ? await window.loadCardHelpers() : null;
+      let el;
+      if (helpers && helpers.createCardElement) {
+        try {
+          el = helpers.createCardElement(this._config.card);
+        } catch (err) {
+          el = undefined;
+        }
+      }
+      if (!el) {
+        el = document.createElement(`hui-${this._config.card.type}-card`);
+        if (el.setConfig) el.setConfig(this._config.card);
+      }
+      el.hass = this._hass;
+      this._inner = el;
+      this.appendChild(el);
     }
-    // Pushing through the hash keeps the browser's back button working.
+
+    this.style.display = visible ? "" : "none";
+    const item = gridItemOf(this);
+    if (item) item.style.display = visible ? "" : "none";
+    reportVisibility(sectionOf(this), this, visible);
+  }
+}
+
+customElements.define("area-domain-hash-card", AreaDomainHashCard);
+
+/* ================================================================== *
+ * The tab chips badge
+ *
+ * One chip per device type with the number that is currently active. Clicking
+ * one writes the URL hash, which the hash cards pick up. Only the chips and
+ * those wrappers are custom; the page around them is a plain sections view.
+ * ================================================================== */
+
+class AreaDomainTabChips extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = null;
+    this._hass = null;
+    this._built = false;
+    this._chipEls = [];
+    this._lastRender = null;
+    this._onHash = () => this._update();
+  }
+
+  static getStubConfig() {
+    return { type: "custom:area-domain-tab-chips", tabs: [] };
+  }
+
+  setConfig(config) {
+    if (!config || typeof config !== "object") throw new Error("Invalid configuration");
+    if (config.tabs !== undefined && !Array.isArray(config.tabs)) {
+      throw new Error("`tabs` must be a list");
+    }
+    this._config = Object.assign({ show_counts: true, tabs: [] }, config);
+    this._built = false;
+    this._lastRender = null;
+    if (this._hass) this._build();
+  }
+
+  connectedCallback() {
+    onHashChange(this._onHash);
+  }
+
+  disconnectedCallback() {
+    offHashChange(this._onHash);
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._config) return;
+    if (!this._built) this._build();
+    this._update();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  _activeSlug() {
+    const hash = currentHash();
+    const tabs = this._config.tabs || [];
+    if (hash && tabs.some((t) => t.slug === hash)) return hash;
+    return tabs.length ? tabs[0].slug : "";
+  }
+
+  _select(slug) {
+    if (currentHash() === slug) return;
+    // Assigning the hash adds a history entry, so the back button steps back
+    // through the tabs.
     window.location.hash = slug;
   }
 
-  async _render() {
-    if (!this._hass || !this._config) return;
-
-    if (!this._helpers && window.loadCardHelpers) {
-      this._helpers = await window.loadCardHelpers();
-    }
-
+  _build() {
     const root = this.shadowRoot;
     root.innerHTML = "";
 
     const style = document.createElement("style");
-    style.textContent = STYLES;
+    style.textContent = CHIP_STYLES;
     root.appendChild(style);
 
     const wrap = document.createElement("div");
-    wrap.className = "page";
-
-    const tabs = document.createElement("div");
-    tabs.className = "tabs";
-    wrap.appendChild(tabs);
-    this._tabs = tabs;
-
-    const body = document.createElement("div");
-    body.className = "sections";
-    wrap.appendChild(body);
-    this._body = body;
-
+    wrap.className = "wrap";
     root.appendChild(wrap);
 
-    this._built = true;
-    this._renderTabs();
-    this._active = null;
-    this._applyHash();
-  }
-
-  _renderTabs() {
-    const chips = this._resolveChips();
-    this._tabs.innerHTML = "";
-    this._chipEls = chips.map((chip) => {
+    this._chipEls = (this._config.tabs || []).map((tab) => {
       const el = document.createElement("button");
-      el.className = "tab";
+      el.className = "chip";
       el.type = "button";
 
       const icon = document.createElement("ha-icon");
-      icon.icon = chipIcon(chip);
+      icon.icon = tab.icon || "mdi:shape-outline";
 
       const labels = document.createElement("span");
-      labels.className = "tab-labels";
+      labels.className = "labels";
       const name = document.createElement("span");
-      name.className = "tab-name";
-      name.textContent = chipName(this._hass, chip);
-      const count = document.createElement("span");
-      count.className = "tab-count";
+      name.className = "name";
+      name.textContent = tab.name || tab.slug;
+      const value = document.createElement("span");
+      value.className = "value";
       labels.appendChild(name);
-      labels.appendChild(count);
+      labels.appendChild(value);
 
       el.appendChild(icon);
       el.appendChild(labels);
-      el.addEventListener("click", () => this._selectTab(chip._slug));
+      el.addEventListener("click", () => this._select(tab.slug));
 
-      this._tabs.appendChild(el);
-      return { el, count, chip };
+      wrap.appendChild(el);
+      return { el, value, tab };
     });
+
+    this._built = true;
   }
 
-  _updateChipCounts() {
-    if (!this._chipEls) return;
-    const cfg = this._config;
-    this._chipEls.forEach((parts) => {
-      const active = parts.chip._slug === this._active;
-      parts.el.classList.toggle("active", active);
-
-      if (!cfg.show_counts) {
-        parts.count.textContent = "";
-        return;
-      }
-      const ids = candidates(this._hass, cfg, parts.chip);
-      const on = filterByMode(this._hass, parts.chip, ids, "active").length;
-      const word = chipStateWord(this._hass, parts.chip);
-      parts.count.textContent = word ? `${on} ${word}` : String(on);
-    });
-  }
-
-  _renderBody() {
+  _update() {
     const cfg = this._config;
     const hass = this._hass;
-    const chips = this._resolveChips();
-    const chip = chips.find((c) => c._slug === this._active) || chips[0];
+    if (!hass || !this._built) return;
+    const active = this._activeSlug();
 
-    this._cards = [];
-    this._body.innerHTML = "";
-    if (!chip) return;
-
-    const areas = resolveAreas(hass, cfg);
-
-    areas.forEach((areaId) => {
-      const scoped = Object.assign({}, cfg, { areas: [areaId] });
-      const ids = sortEntities(hass, candidates(hass, scoped, chip), cfg.groups_first);
-      if (!ids.length && cfg.hide_empty_areas !== false) return;
-
-      const section = document.createElement("div");
-      section.className = "section";
-
-      const heading = document.createElement("div");
-      heading.className = "section-heading";
-      const icon = areaIcon(hass, areaId);
-      if (icon) {
-        const iconEl = document.createElement("ha-icon");
-        iconEl.icon = icon;
-        heading.appendChild(iconEl);
-      }
-      const title = document.createElement("span");
-      title.textContent = areaName(hass, areaId);
-      heading.appendChild(title);
-      section.appendChild(heading);
-
-      const grid = document.createElement("div");
-      grid.className = "grid";
-      grid.style.setProperty("--adc-columns", String(cfg.columns || 2));
-
-      ids.forEach((id) => {
-        const card = this._createCard(tileCard(hass, id, cfg.features));
-        if (card) grid.appendChild(card);
-      });
-
-      section.appendChild(grid);
-      this._body.appendChild(section);
+    const counts = this._chipEls.map((parts) => {
+      if (!cfg.show_counts) return "";
+      const chip = parts.tab.chip || {};
+      const ids = candidates(hass, cfg, chip);
+      const on = filterByMode(hass, chip, ids, "active").length;
+      const word = chipStateWord(hass, chip);
+      return word ? `${on} ${word}` : String(on);
     });
 
-    if (!this._body.children.length) {
-      const empty = document.createElement("div");
-      empty.className = "empty";
-      empty.textContent = tr(hass, "ui.panel.lovelace.cards.empty_state.title") || "Nothing to show";
-      this._body.appendChild(empty);
-    }
-  }
+    const key = `${active}|${counts.join(",")}`;
+    if (this._lastRender === key) return;
+    this._lastRender = key;
 
-  _createCard(config) {
-    let el;
-    if (this._helpers && this._helpers.createCardElement) {
-      try {
-        el = this._helpers.createCardElement(config);
-      } catch (err) {
-        el = undefined;
-      }
-    }
-    if (!el) {
-      el = document.createElement("hui-tile-card");
-      if (el.setConfig) {
-        try {
-          el.setConfig(config);
-        } catch (err) {
-          return undefined;
-        }
-      }
-    }
-    el.hass = this._hass;
-    this._cards.push(el);
-    return el;
+    this._chipEls.forEach((parts, i) => {
+      parts.el.classList.toggle("active", parts.tab.slug === active);
+      parts.value.textContent = counts[i];
+    });
   }
 }
 
-const STYLES = `
+const CHIP_STYLES = `
   :host { display: block; }
-  .page {
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 8px 4px 24px;
-    box-sizing: border-box;
-  }
-  .tabs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: center;
-    padding: 8px 0 20px;
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    background: var(--lovelace-background, var(--primary-background-color, transparent));
-  }
-  .tab {
+  .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .chip {
     display: inline-flex;
     align-items: center;
     gap: 8px;
     height: var(--ha-badge-size, 36px);
+    box-sizing: border-box;
     padding: 0 12px;
     border-radius: var(--ha-badge-border-radius, calc(var(--ha-badge-size, 36px) / 2));
     background: var(--ha-card-background, var(--card-background-color, #fff));
@@ -933,69 +1080,613 @@ const STYLES = `
     box-shadow: var(--ha-card-box-shadow, none);
     color: var(--primary-text-color);
     font: inherit;
+    font-family: var(--ha-font-family-body, inherit);
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
-  .tab:hover { background: var(--secondary-background-color, rgba(0, 0, 0, 0.04)); }
-  .tab.active {
+  .chip:hover { background: var(--secondary-background-color, rgba(0, 0, 0, 0.04)); }
+  .chip:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+  .chip.active {
     border-color: var(--primary-color);
     background: color-mix(in srgb, var(--primary-color) 14%, var(--ha-card-background, var(--card-background-color, #fff)));
   }
-  .tab.active ha-icon { color: var(--primary-color); }
-  .tab ha-icon { --mdc-icon-size: 18px; display: inline-flex; color: var(--secondary-text-color); }
-  .tab-labels { display: flex; flex-direction: column; align-items: flex-start; white-space: nowrap; }
-  .tab-name { font-size: 10px; font-weight: 500; line-height: 10px; letter-spacing: 0.1px; }
-  .tab-count {
+  .chip.active ha-icon { color: var(--primary-color); }
+  ha-icon { --mdc-icon-size: 18px; display: inline-flex; color: var(--secondary-text-color); }
+  .labels { display: flex; flex-direction: column; align-items: flex-start; white-space: nowrap; }
+  .name { font-size: 10px; font-weight: 500; line-height: 10px; letter-spacing: 0.1px; }
+  .value {
     font-size: var(--ha-badge-font-size, 12px);
     font-weight: 500;
     line-height: 16px;
     letter-spacing: 0.1px;
   }
-  .tab-count:empty { display: none; }
-
-  .sections {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 24px 32px;
-    align-items: start;
-  }
-  .section-heading {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0 4px 12px;
-    font-size: 20px;
-    font-weight: 400;
-    color: var(--primary-text-color);
-  }
-  .section-heading ha-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(var(--adc-columns, 2), minmax(0, 1fr));
-    gap: 8px;
-  }
-  @media (max-width: 480px) {
-    .grid { grid-template-columns: 1fr; }
-  }
-  .empty {
-    grid-column: 1 / -1;
-    text-align: center;
-    color: var(--secondary-text-color);
-    padding: 32px 0;
-  }
+  .value:empty { display: none; }
 `;
 
-customElements.define("area-domain-tabs-card", AreaDomainTabsCard);
+customElements.define("area-domain-tab-chips", AreaDomainTabChips);
+
+/* ================================================================== *
+ * Editors
+ *
+ * Strategies take a config element the same way cards do, through a static
+ * getConfigElement(). The elements below are shared between the strategies and
+ * the standalone card, since they configure the same options.
+ * ================================================================== */
+
+const DOMAIN_OPTIONS = [
+  "light", "switch", "fan", "cover", "valve", "lock", "binary_sensor", "sensor",
+  "climate", "water_heater", "humidifier", "media_player", "vacuum", "lawn_mower",
+  "input_boolean", "automation", "script", "scene", "person", "device_tracker",
+  "alarm_control_panel", "remote", "siren", "camera", "update", "button",
+];
+
+const GROUPS_SELECTOR = {
+  select: {
+    mode: "dropdown",
+    options: [
+      { value: "auto", label: "Skip a group as soon as one member is listed" },
+      { value: "strict", label: "Skip a group only when every member is listed" },
+      { value: "exclude", label: "Never list groups" },
+      { value: "include", label: "List groups like any other entity" },
+    ],
+  },
+};
+
+const DOMAIN_SELECTOR = {
+  select: {
+    mode: "dropdown",
+    custom_value: true,
+    options: DOMAIN_OPTIONS.map((d) => ({ value: d, label: d })),
+  },
+};
+
+const SECTION_SCHEMA = [
+  { name: "areas", selector: { area: { multiple: true } } },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "domain", selector: DOMAIN_SELECTOR },
+      { name: "device_class", selector: { text: {} } },
+    ],
+  },
+  { name: "labels", selector: { label: { multiple: true } } },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "title", selector: { text: {} } },
+      { name: "icon", selector: { icon: {} } },
+    ],
+  },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      {
+        name: "mode",
+        selector: {
+          select: {
+            mode: "dropdown",
+            options: [
+              { value: "all", label: "All" },
+              { value: "active", label: "Active only" },
+              { value: "inactive", label: "Inactive only" },
+              { value: "unavailable", label: "Unavailable only" },
+            ],
+          },
+        },
+      },
+      {
+        name: "heading_style",
+        selector: {
+          select: {
+            mode: "dropdown",
+            options: [
+              { value: "title", label: "Title" },
+              { value: "subtitle", label: "Subtitle" },
+            ],
+          },
+        },
+      },
+    ],
+  },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "features", selector: { boolean: {} } },
+      { name: "groups_first", selector: { boolean: {} } },
+    ],
+  },
+  { name: "groups", selector: GROUPS_SELECTOR },
+  { name: "column_span", selector: { number: { min: 1, max: 4, mode: "box" } } },
+  { name: "exclude_keywords", selector: { text: { multiple: true } } },
+  { name: "include_keywords", selector: { text: { multiple: true } } },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "include_hidden", selector: { boolean: {} } },
+      { name: "include_diagnostic", selector: { boolean: {} } },
+    ],
+  },
+];
+
+const TABS_SCHEMA = [
+  { name: "areas", selector: { area: { multiple: true } } },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "columns", selector: { number: { min: 1, max: 6, mode: "box" } } },
+      { name: "show_counts", selector: { boolean: {} } },
+    ],
+  },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "features", selector: { boolean: {} } },
+      { name: "hide_empty_areas", selector: { boolean: {} } },
+    ],
+  },
+  { name: "tile_columns", selector: { number: { min: 1, max: 12, mode: "box" } } },
+  { name: "groups", selector: GROUPS_SELECTOR },
+  { name: "groups_first", selector: { boolean: {} } },
+  { name: "exclude_keywords", selector: { text: { multiple: true } } },
+  { name: "include_keywords", selector: { text: { multiple: true } } },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "include_hidden", selector: { boolean: {} } },
+      { name: "include_diagnostic", selector: { boolean: {} } },
+    ],
+  },
+];
+
+const CHIP_SCHEMA = [
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "domain", selector: DOMAIN_SELECTOR },
+      { name: "device_class", selector: { text: {} } },
+    ],
+  },
+  { name: "labels", selector: { label: { multiple: true } } },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "name", selector: { text: {} } },
+      { name: "icon", selector: { icon: {} } },
+    ],
+  },
+];
+
+const LABELS = {
+  areas: "Areas (empty = every area)",
+  domain: "Domain",
+  device_class: "Device class (door, window, motion, ...)",
+  labels: "Labels",
+  title: "Heading (empty = translated domain or device class)",
+  icon: "Icon",
+  mode: "Which entities",
+  heading_style: "Heading style",
+  features: "Give tile cards their domain controls",
+  groups: "Group entities",
+  groups_first: "Put groups at the top of the list",
+  column_span: "Section width in columns",
+  columns: "Maximum sections side by side",
+  tile_columns: "Card width, out of 12 (6 = two per row)",
+  show_counts: "Show how many are active under each tab",
+  hide_empty_areas: "Hide areas without matching devices",
+  exclude_keywords: "Skip entities whose id or name contains",
+  include_keywords: "Only include entities whose id or name contains",
+  include_hidden: "Include hidden entities",
+  include_diagnostic: "Include diagnostic/config entities",
+  name: "Name (empty = translated domain or device class)",
+};
+
+const EDITOR_STYLES = `
+  :host { display: block; }
+  .section { margin-bottom: 16px; }
+  ha-expansion-panel { display: block; margin-bottom: 8px; --expansion-panel-content-padding: 12px; }
+  .panel-icons { display: flex; align-items: center; gap: 4px; padding-right: 8px; }
+  .chip-box {
+    border: 1px solid var(--divider-color, #e0e0e0);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  .chip-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 500; }
+  .chip-head .spacer { flex: 1; }
+  .btn {
+    border: 1px solid var(--divider-color, #e0e0e0);
+    background: var(--card-background-color, #fff);
+    color: var(--primary-text-color);
+    border-radius: 6px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .btn:hover:not(:disabled) { background: var(--secondary-background-color, rgba(0, 0, 0, 0.05)); }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .add-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  h4 { margin: 16px 0 8px; }
+  .hint { color: var(--secondary-text-color); font-size: 13px; margin: 0 0 12px; }
+`;
+
+class BaseEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = null;
+    this._hass = null;
+    this._forms = [];
+    this._lastEmitted = null;
+  }
+
+  setConfig(config) {
+    this._config = JSON.parse(JSON.stringify(config || {}));
+    this._prepare();
+
+    // Home Assistant hands the config straight back after every edit. Skipping
+    // the rebuild there keeps panels open and the focused field focused. The
+    // comparison runs on the prepared config so defaults filled in by _prepare
+    // do not read as a change.
+    const normalized = JSON.stringify(this._config);
+    if (normalized === this._lastEmitted) return;
+    this._render();
+  }
+
+  _prepare() {}
+
+  set hass(hass) {
+    this._hass = hass;
+    this._forms.forEach((f) => (f.hass = hass));
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  _emit() {
+    this._lastEmitted = JSON.stringify(this._config);
+    this.dispatchEvent(
+      new CustomEvent("config-changed", {
+        detail: { config: this._config },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  _makeForm(data, schema, onChange) {
+    const form = document.createElement("ha-form");
+    form.hass = this._hass;
+    form.schema = schema;
+    form.data = data;
+    form.computeLabel = (s) => LABELS[s.name] || s.name;
+    form.addEventListener("value-changed", (ev) => {
+      ev.stopPropagation();
+      onChange(ev.detail.value);
+    });
+    this._forms.push(form);
+    return form;
+  }
+
+  _button(label, fn, disabled) {
+    const b = document.createElement("button");
+    b.className = "btn";
+    b.textContent = label;
+    b.disabled = !!disabled;
+    b.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      fn();
+    });
+    return b;
+  }
+
+  _startRender() {
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+    this._forms = [];
+    const style = document.createElement("style");
+    style.textContent = EDITOR_STYLES;
+    root.appendChild(style);
+    return root;
+  }
+}
+
+/* -------------------- section strategy editor -------------------- */
+
+class AreaDomainSectionStrategyEditor extends BaseEditor {
+  // The areas view takes the same options bar one: how many sections fit side
+  // by side, which is a view setting rather than a section setting.
+  get _isView() {
+    return false;
+  }
+
+  _schema() {
+    if (!this._isView) return SECTION_SCHEMA;
+    return SECTION_SCHEMA.filter((row) => row.name !== "column_span").concat([
+      { name: "columns", selector: { number: { min: 1, max: 6, mode: "box" } } },
+    ]);
+  }
+
+  _render() {
+    const root = this._startRender();
+    const cfg = this._config;
+
+    root.appendChild(
+      this._makeForm(
+        {
+          columns: cfg.columns || 3,
+          areas: cfg.areas || [],
+          domain: cfg.domain || "",
+          device_class: cfg.device_class || "",
+          labels: cfg.labels || (cfg.label ? [cfg.label] : []),
+          title: typeof cfg.title === "string" ? cfg.title : "",
+          icon: cfg.icon || "",
+          mode: cfg.mode || "all",
+          heading_style: cfg.heading_style || "title",
+          features: cfg.features !== false,
+          groups_first: cfg.groups_first !== false,
+          groups: cfg.groups || "auto",
+          column_span: cfg.column_span,
+          exclude_keywords: cfg.exclude_keywords || [],
+          include_keywords: cfg.include_keywords || [],
+          include_hidden: !!cfg.include_hidden,
+          include_diagnostic: !!cfg.include_diagnostic,
+        },
+        this._schema(),
+        (value) => {
+          const next = { type: cfg.type };
+          if (this._isView && value.columns && value.columns !== 3) next.columns = value.columns;
+          if (value.areas && value.areas.length) next.areas = value.areas;
+          if (value.domain) next.domain = value.domain;
+          if (value.device_class) next.device_class = value.device_class;
+          if (value.labels && value.labels.length) next.labels = value.labels;
+          if (value.title) next.title = value.title;
+          if (value.icon) next.icon = value.icon;
+          if (value.mode && value.mode !== "all") next.mode = value.mode;
+          if (value.heading_style && value.heading_style !== "title") {
+            next.heading_style = value.heading_style;
+          }
+          if (value.features === false) next.features = false;
+          if (value.groups_first === false) next.groups_first = false;
+          if (value.groups && value.groups !== "auto") next.groups = value.groups;
+          if (value.column_span) next.column_span = value.column_span;
+          if (value.exclude_keywords && value.exclude_keywords.length) {
+            next.exclude_keywords = value.exclude_keywords;
+          }
+          if (value.include_keywords && value.include_keywords.length) {
+            next.include_keywords = value.include_keywords;
+          }
+          if (value.include_hidden) next.include_hidden = true;
+          if (value.include_diagnostic) next.include_diagnostic = true;
+
+          this._config = next;
+          this._emit();
+        }
+      )
+    );
+  }
+}
+
+customElements.define("area-domain-section-strategy-editor", AreaDomainSectionStrategyEditor);
+
+class AreaDomainAreasStrategyEditor extends AreaDomainSectionStrategyEditor {
+  get _isView() {
+    return true;
+  }
+}
+
+customElements.define("area-domain-areas-strategy-editor", AreaDomainAreasStrategyEditor);
+
+/* -------------------- tabs editor -------------------- */
+
+class AreaDomainTabsEditor extends BaseEditor {
+  constructor() {
+    super();
+    this._open = [];
+  }
+
+  _prepare() {
+    if (!Array.isArray(this._config.chips)) this._config.chips = [];
+    this._open.length = this._config.chips.length;
+  }
+
+  _moveOpen(from, to) {
+    const open = this._open;
+    [open[from], open[to]] = [open[to], open[from]];
+  }
+
+  _chipTitle(chip, i) {
+    if (chip.name) return chip.name;
+    if (this._hass && (chip.domain || chip.device_class)) return chipName(this._hass, chip);
+    return chip.device_class || chip.domain || `Tab ${i + 1}`;
+  }
+
+  _render() {
+    const root = this._startRender();
+    const cfg = this._config;
+
+    root.appendChild(
+      this._makeForm(
+        {
+          areas: cfg.areas || [],
+          columns: cfg.columns || 3,
+          show_counts: cfg.show_counts !== false,
+          features: cfg.features !== false,
+          hide_empty_areas: cfg.hide_empty_areas !== false,
+          tile_columns: cfg.tile_columns || 6,
+          groups: cfg.groups || "auto",
+          groups_first: cfg.groups_first !== false,
+          exclude_keywords: cfg.exclude_keywords || [],
+          include_keywords: cfg.include_keywords || [],
+          include_hidden: !!cfg.include_hidden,
+          include_diagnostic: !!cfg.include_diagnostic,
+        },
+        TABS_SCHEMA,
+        (value) => {
+          cfg.areas = value.areas || [];
+          cfg.columns = value.columns || 3;
+          cfg.show_counts = value.show_counts !== false;
+          cfg.features = value.features !== false;
+          cfg.hide_empty_areas = value.hide_empty_areas !== false;
+          cfg.tile_columns = value.tile_columns || 6;
+          cfg.groups = value.groups || "auto";
+          cfg.groups_first = value.groups_first !== false;
+          cfg.exclude_keywords = value.exclude_keywords || [];
+          cfg.include_keywords = value.include_keywords || [];
+          cfg.include_hidden = !!value.include_hidden;
+          cfg.include_diagnostic = !!value.include_diagnostic;
+          this._emit();
+        }
+      )
+    );
+
+    const heading = document.createElement("h4");
+    heading.textContent = "Tabs";
+    root.appendChild(heading);
+
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = cfg.chips.length
+      ? "Each tab matches a device type."
+      : "No tabs configured: the domains found in the selected areas are used automatically.";
+    root.appendChild(hint);
+
+    const usePanel = !!customElements.get("ha-expansion-panel");
+
+    cfg.chips.forEach((chip, i) => {
+      const title = this._chipTitle(chip, i);
+      const buttons = [
+        this._button("↑", () => {
+          const c = cfg.chips;
+          [c[i - 1], c[i]] = [c[i], c[i - 1]];
+          this._moveOpen(i, i - 1);
+          this._emit();
+          this._render();
+        }, i === 0),
+        this._button("↓", () => {
+          const c = cfg.chips;
+          [c[i + 1], c[i]] = [c[i], c[i + 1]];
+          this._moveOpen(i, i + 1);
+          this._emit();
+          this._render();
+        }, i === cfg.chips.length - 1),
+        this._button("✕", () => {
+          cfg.chips.splice(i, 1);
+          this._open.splice(i, 1);
+          this._emit();
+          this._render();
+        }),
+      ];
+
+      let box;
+      let titleEl;
+
+      if (usePanel) {
+        box = document.createElement("ha-expansion-panel");
+        box.outlined = true;
+        box.header = title;
+        box.expanded = !!this._open[i];
+        box.addEventListener("expanded-changed", (ev) => {
+          this._open[i] = !!ev.detail.expanded;
+        });
+        const icons = document.createElement("div");
+        icons.slot = "icons";
+        icons.className = "panel-icons";
+        buttons.forEach((b) => {
+          b.addEventListener("click", (ev) => ev.stopPropagation());
+          icons.appendChild(b);
+        });
+        box.appendChild(icons);
+        titleEl = { set textContent(value) { box.header = value; } };
+      } else {
+        box = document.createElement("div");
+        box.className = "chip-box";
+        const head = document.createElement("div");
+        head.className = "chip-head";
+        titleEl = document.createElement("span");
+        titleEl.textContent = title;
+        const spacer = document.createElement("span");
+        spacer.className = "spacer";
+        head.appendChild(titleEl);
+        head.appendChild(spacer);
+        buttons.forEach((b) => head.appendChild(b));
+        box.appendChild(head);
+      }
+
+      box.appendChild(
+        this._makeForm(
+          {
+            domain: chip.domain || "",
+            device_class: chip.device_class || "",
+            labels: chip.labels || (chip.label ? [chip.label] : []),
+            name: chip.name || "",
+            icon: chip.icon || "",
+          },
+          CHIP_SCHEMA,
+          (value) => {
+            const next = {};
+            if (value.domain) next.domain = value.domain;
+            if (value.device_class) next.device_class = value.device_class;
+            if (value.labels && value.labels.length) next.labels = value.labels;
+            if (value.name) next.name = value.name;
+            if (value.icon) next.icon = value.icon;
+            cfg.chips[i] = next;
+            titleEl.textContent = this._chipTitle(next, i);
+            this._emit();
+          }
+        )
+      );
+
+      root.appendChild(box);
+    });
+
+    const addRow = document.createElement("div");
+    addRow.className = "add-row";
+    addRow.appendChild(
+      this._button("+ Add tab", () => {
+        cfg.chips.push({ domain: "light" });
+        this._open[cfg.chips.length - 1] = true;
+        this._emit();
+        this._render();
+      })
+    );
+    if (!cfg.chips.length) {
+      addRow.appendChild(
+        this._button("+ Add every detected domain", () => {
+          if (!this._hass) return;
+          cfg.chips = autoChips(this._hass, cfg);
+          this._emit();
+          this._render();
+        })
+      );
+    }
+    root.appendChild(addRow);
+  }
+}
+
+customElements.define("area-domain-tabs-strategy-editor", AreaDomainTabsEditor);
 
 /* ================================================================== *
  * Registration
  * ================================================================== */
 
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "area-domain-tabs-card",
-  name: "Area Domain Tabs",
-  description: "A page of tile cards per area, with a chip per device type acting as tabs.",
+// The chip row is a badge. The strategy adds it to every view it generates,
+// but listing it makes it available in the badge picker as well.
+window.customBadges = window.customBadges || [];
+window.customBadges.push({
+  type: "area-domain-tab-chips",
+  name: "Area Domain Tab Chips",
+  description: "A chip per device type that navigates between the views of the tabs dashboard.",
   preview: false,
   documentationURL: "https://github.com/Gessink/area-domain-strategies",
 });

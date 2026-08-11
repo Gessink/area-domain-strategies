@@ -2,24 +2,72 @@
 
 [![hacs][hacs-badge]][hacs-url]
 
-Two Home Assistant dashboard strategies that build pages out of your areas and device types, using the same matching rules as [area-domain-chips][chips].
+Home Assistant dashboard strategies that build pages out of your areas and device types, using the same matching rules as [area-domain-chips][chips].
 
-- **`custom:area-domain-section`** generates a native grid section: one device type across one or more areas, with a heading and a Home Assistant tile card per entity. Groups come first in the list.
-- **`custom:area-domain-tabs`** generates a whole page: a chip per device type at the top that works as tabs, and below it one section per area showing that device type's tile cards. The active tab lives in the URL hash, so it survives a reload and works with the browser's back button.
+Everything they produce is a **native sections view**, so Home Assistant does the layout: `max_columns`, the responsive column count, the section grid, the tile cards. Nothing is reimplemented here.
 
-Tile cards get the controls that fit them: a brightness slider for dimmable lights, open/stop/close plus a position slider for covers, target temperature and HVAC modes for thermostats, a volume slider for media players, and so on.
+- **`custom:area-domain-section`** generates one grid section: a device type across one or more areas, heading first, then a tile card per entity. Groups lead the list.
+- **`custom:area-domain-areas`** generates a sections view: one section per area for a single device type.
+- **`custom:area-domain-tabs`** generates one sections view with a chip per device type on top. Clicking a chip swaps what every section shows, through the URL hash.
+
+All three have a visual editor.
 
 ## Installation
 
-### HACS
+HACS → three-dot menu → **Custom repositories** → `https://github.com/Gessink/area-domain-strategies`, category **Dashboard**. Install and reload your browser.
 
-1. HACS → three-dot menu → **Custom repositories**
-2. Add `https://github.com/Gessink/area-domain-strategies`, category **Dashboard**
-3. Install, then reload your browser (Ctrl+F5)
+Manually: copy `dist/area-domain-strategies.js` to `<config>/www/` and add `/local/area-domain-strategies.js` as a JavaScript module under **Settings → Dashboards → Resources**.
 
-### Manual
+## Tabs view
 
-Copy `dist/area-domain-strategies.js` to `<config>/www/` and add it under **Settings → Dashboards → Resources** as a JavaScript module pointing at `/local/area-domain-strategies.js`.
+One view, one section per area, a chip per device type on top:
+
+```yaml
+views:
+  - title: Huis
+    strategy:
+      type: custom:area-domain-tabs
+      areas: [living_room, kitchen, bedroom, bathroom]
+      chips:
+        - domain: light
+        - domain: cover
+        - domain: climate
+        - domain: media_player
+        - domain: binary_sensor
+          device_class: door
+```
+
+Leave `chips` out and the strategy detects which domains actually exist in the selected areas, in a sensible order.
+
+The view is a plain Home Assistant sections view: `max_columns`, the responsive column count and the section grid are all its own. Clicking a chip sets the URL hash, so the tab is bookmarkable (`#covers`), the back button steps through the tabs, and a reload lands on the same one. Each chip shows how many of that type are currently active: `Lichten / 3 aan`.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `areas` | list | all areas | Areas to show, in this order. |
+| `chips` | list | auto-detected | One entry per tab. Takes `domain`, `device_class`, `label`, `name`, `icon`. |
+| `columns` | number | `3` | `max_columns`: how many sections fit side by side. |
+| `tile_columns` | number | `6` | Card width out of 12. `6` is two per row, `12` is full width. |
+| `hide_empty_areas` | boolean | `true` | Skip areas with no matching devices at all. |
+| `show_counts` | boolean | `true` | Show how many are active under each chip. |
+| `features` | boolean | `true` | Give tile cards their domain controls. |
+| `groups` / `groups_first` | | | See [Groups](#groups). |
+| `mode` | `all` \| `active` \| `inactive` \| `unavailable` | `all` | Which entities the sections list. |
+| `exclude_*` / `include_*` | | | See the section options below. |
+
+## Areas view
+
+One view, one device type, a section per area:
+
+```yaml
+views:
+  - title: Verlichting
+    strategy:
+      type: custom:area-domain-areas
+      domain: light
+      columns: 3
+```
+
+Takes the same options as a section, plus `columns` for `max_columns`.
 
 ## Section strategy
 
@@ -33,10 +81,6 @@ views:
           type: custom:area-domain-section
           areas: [living_room]
           domain: light
-      - strategy:
-          type: custom:area-domain-section
-          areas: [living_room]
-          domain: cover
       - strategy:
           type: custom:area-domain-section
           areas: [living_room, kitchen, hallway]
@@ -69,59 +113,15 @@ views:
 
 Without a `title`, the heading is the translated, pluralised device class or domain name, with the area appended when exactly one area is selected: `Lichten · Woonkamer`.
 
-## Tabs page strategy
+## How the tabs work
 
-Give a whole view over to the strategy:
+Home Assistant strategies generate their config once and do not re-run on a click, and native `visibility` only takes the conditions Home Assistant knows: `state`, `numeric_state`, `screen`, `user`. There is no URL condition, so hash-driven tabs cannot be expressed in a native `visibility` block. Cards that work this way, Bubble Card for instance, read the hash in their own code.
 
-```yaml
-views:
-  - title: Huis
-    strategy:
-      type: custom:area-domain-tabs
-      areas: [living_room, kitchen, bedroom, bathroom]
-      chips:
-        - domain: light
-        - domain: cover
-        - domain: climate
-        - domain: media_player
-        - domain: binary_sensor
-          device_class: door
-```
+So the strategy generates every tab's cards up front and wraps each one in a `custom:area-domain-hash-card`. That wrapper renders its card only while the hash matches, and builds the inner card lazily the first time it is needed. Everything around the wrappers is native: the view, the sections, `max_columns`, the 12 column grid, and the tile cards themselves.
 
-Leave `chips` out and the strategy detects which domains actually exist in the selected areas and offers those, in a sensible order.
+One caveat worth knowing. A hidden element keeps its slot in a CSS grid, so collapsing only the wrapper would leave a hole where the card was. The wrapper therefore also collapses the grid item Home Assistant put around it, and hides a section once none of its cards are showing. That is one or two steps into Home Assistant's own DOM, each guarded: if a future release changes that shape, the tabs keep working and the worst case is a gap in the layout.
 
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `areas` | list | all areas | Areas to show, in this order. |
-| `chips` | list | auto-detected | One entry per tab. Takes the same `domain`, `device_class`, `label`, `name` and `icon` keys as a section. |
-| `columns` | number | `2` | Tile cards per row inside an area. |
-| `features` | boolean | `true` | Give the tile cards their domain controls. |
-| `groups` / `groups_first` | | | As above. |
-| `hide_empty_areas` | boolean | `true` | Skip areas with no devices of the active type. |
-| `show_counts` | boolean | `true` | Show how many are active under each tab name. |
-| `exclude_*` / `include_*` | | | As above. |
-
-Each chip shows the device type and how many of them are currently active, so `Lichten / 3 aan` while you are on the covers tab.
-
-### How the tabs work
-
-Home Assistant strategies generate their config once, when the dashboard loads; they do not re-run when you click something. Native section `visibility` can hide and show, but only on conditions Home Assistant knows: `state`, `numeric_state`, `screen`, `user`. There is no URL or hash condition, so hash-driven tabs cannot be expressed in native sections. Other cards that work this way, Bubble Card for instance, do the hash matching inside their own card code.
-
-So the view strategy hands the page to one card, `custom:area-domain-tabs-card`, which renders the tab chips, an area heading per area and real Home Assistant tile cards underneath. The cards are created through `loadCardHelpers()`, so they are the same `hui-tile-card` elements Home Assistant would build itself: same look, same features, same more-info dialogs.
-
-What you give up compared to native sections is editing the page in the UI, which a strategy-generated view does not offer anyway. What you get is a tab switch with no helper entity, no page reload, a bookmarkable `#covers` URL and a working back button.
-
-If you would rather have native sections, use the section strategy and put one section per area in a normal `sections` view.
-
-You can also use the card directly, without the strategy:
-
-```yaml
-type: custom:area-domain-tabs-card
-areas: [living_room, kitchen]
-chips:
-  - domain: light
-  - domain: cover
-```
+`grid_options` on the wrappers keeps the sizing native: `columns: full` for the area heading, `tile_columns` for the tiles.
 
 ## Groups
 
@@ -134,7 +134,7 @@ Group helpers expose their members in the `entity_id` attribute. `groups` decide
 | `exclude` | Never list group entities. |
 | `include` | List groups like any other entity. |
 
-`groups_first: true` puts whichever groups survive at the top of the list, above the individual devices they control. Combine `groups: include` with `groups_first: true` when you want the group as a master control above its members.
+`groups_first: true` puts whichever groups survive at the top of the list. Combine `groups: include` with `groups_first: true` when you want the group as a master control above its members.
 
 ## Tile card features
 
