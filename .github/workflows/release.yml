@@ -1,0 +1,25 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # HACS downloads `filename` from the release assets when a release exists,
+      # so the file has to sit next to the release, not only in dist/.
+      - name: Create release and attach area-domain-strategies.js
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/area-domain-strategies.js
+          generate_release_notes: true
