@@ -18,7 +18,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.6.0";
+const VERSION = "1.6.1";
 
 /* ================================================================== *
  * Shared core
@@ -1577,7 +1577,14 @@ const ANY_DEVICE_CLASS_DOMAINS = ["alarm_control_panel", "lock"];
 // installed. Nothing is emitted for one that is missing, so the page never
 // shows "custom element doesn't exist".
 const COMPANIONS = {
-  washdata: { card: "washdata-card", platform: "ha_washdata", icon: "mdi:washing-machine" },
+  washdata: {
+    card: "washdata-card",
+    platform: "ha_washdata",
+    icon: "mdi:washing-machine",
+    // The lifetime total is a nice figure on a dedicated page, but on a room
+    // page it is noise next to a running cycle.
+    defaults: { show_energy: false },
+  },
 };
 
 // The name the companion card registered itself under, so the section heading
@@ -1617,12 +1624,57 @@ function companionDevices(hass, cfg, name, areas) {
   return found;
 }
 
+// Vacuums that can be sent to a Home Assistant area at all.
+function areaCapableVacuums(hass) {
+  return Object.keys(hass.states).filter((id) => {
+    if (id.split(".")[0] !== "vacuum") return false;
+    const attrs = hass.states[id].attributes || {};
+    return !!((attrs.supported_features || 0) & VACUUM_CLEAN_AREA);
+  });
+}
+
+// Which areas each vacuum has segments mapped to. That mapping lives in the
+// entity registry options rather than in the state, so it takes a round trip.
+// A null result means the question could not be answered, which is different
+// from an answer of "none".
+async function vacuumAreaMapping(hass, entityIds) {
+  if (!entityIds.length || !hass.callWS) return null;
+  try {
+    const entries = await hass.callWS({
+      type: "config/entity_registry/get_entries",
+      entity_ids: entityIds,
+    });
+    if (!entries) return null;
+    const out = {};
+    entityIds.forEach((id) => {
+      const entry = entries[id];
+      const options = (entry && entry.options && entry.options.vacuum) || {};
+      const mapping = options.area_mapping;
+      out[id] = mapping && typeof mapping === "object" ? Object.keys(mapping) : [];
+    });
+    return out;
+  } catch (err) {
+    return null;
+  }
+}
+
+// Every entity belonging to those devices, whatever its domain, so a companion
+// card can take the whole appliance off the rest of the page.
+function companionEntities(hass, devices) {
+  if (!hass.entities || !devices.length) return [];
+  const scope = new Set(devices);
+  return Object.keys(hass.entities).filter((entityId) => {
+    const reg = hass.entities[entityId];
+    return !!reg && scope.has(reg.device_id);
+  });
+}
+
 const DEFAULT_ROOM_SECTIONS = [
   { key: "shortcuts" },
-  { key: "washdata", companion: "washdata" },
   { key: "light", domain: "light" },
   { key: "cover", domains: ["cover", "valve"] },
   { key: "climate", domains: ["climate", "water_heater"], card: "thermostat" },
+  { key: "washdata", companion: "washdata" },
   { key: "media_player", domain: "media_player" },
   { key: "sensor", domain: "sensor", device_classes: COMMON_SENSOR_CLASSES, card: "sensor" },
   {
@@ -1779,13 +1831,16 @@ function shortcutCards(hass, cfg, entry, areas) {
       // Home Assistant 2026.3 added vacuum.clean_area, which sends the robot to
       // the areas you already have rather than to vendor segment numbers. Use
       // it when the vacuum reports CLEAN_AREA, wherever in the house it docks.
-      const capable = entry.vacuum_entity
-        ? asArray(entry.vacuum_entity)
-        : Object.keys(hass.states).filter((id) => {
-            if (id.split(".")[0] !== "vacuum") return false;
-            const attrs = hass.states[id].attributes || {};
-            return !!((attrs.supported_features || 0) & VACUUM_CLEAN_AREA);
-          });
+      const areaCapable = areaCapableVacuums(hass);
+      let capable = entry.vacuum_entity ? asArray(entry.vacuum_entity) : areaCapable;
+
+      // A robot can only be sent to a room it has a segment mapped to. Where
+      // the mapping is known, drop the ones this room is not in; where the
+      // lookup failed, leave the button as it was rather than hide it wrongly.
+      const mapping = cfg._vacuum_areas;
+      if (mapping) {
+        capable = capable.filter((id) => (mapping[id] || []).some((area) => areas.includes(area)));
+      }
 
       if (capable.length) {
         const name = tr(hass, "component.vacuum.services.clean_area.name") || "Clean area";
@@ -1802,8 +1857,13 @@ function shortcutCards(hass, cfg, entry, areas) {
         return;
       }
 
-      // Nothing that can clean a single area: fall back to starting whatever
-      // vacuum lives here, which is a full run.
+      // In a home where area cleaning exists, a room without a mapping simply
+      // gets no button: falling back to a whole-house run would be a nasty
+      // surprise from a button that says "clean this room".
+      if (areaCapable.length) return;
+
+      // No robot can clean a single area at all: start whatever vacuum lives
+      // here, which is a full run.
       const vacuums = candidates(hass, scoped, { domain: "vacuum" });
       if (!vacuums.length) return;
       const name = tr(hass, "ui.card.vacuum.actions.start_cleaning") || "Start cleaning";
@@ -1830,10 +1890,17 @@ function shortcutCards(hass, cfg, entry, areas) {
 
 /* -------------------- sections -------------------- */
 
-function roomSectionCards(hass, cfg, entry, areas) {
+function roomSectionCards(hass, cfg, entry, areas, claimed) {
   const chip = chipFromConfig(entry);
   const scoped = Object.assign({}, cfg, entry, { areas, chip });
-  const { headers, items } = sectionEntities(hass, scoped, chip);
+  const found = sectionEntities(hass, scoped, chip);
+
+  // First section wins. An entity an earlier section already took, or that a
+  // companion card covers whole, does not appear a second time.
+  const free = (id) => !claimed || !claimed.has(id);
+  const headers = found.headers.filter(free);
+  const items = found.items.filter(free);
+
   const tileColumns = entry.tile_columns || cfg.tile_columns || 6;
   const cards = [];
   const used = headers.concat(items);
@@ -1899,7 +1966,7 @@ function restCards(hass, cfg, entry, areas, claimed) {
   });
 }
 
-function buildRoomView(config, hass) {
+async function buildRoomView(config, hass) {
   const cfg = Object.assign(
     {
       columns: 3,
@@ -1917,6 +1984,11 @@ function buildRoomView(config, hass) {
 
   const areas = resolveAreas(hass, cfg);
   const entries = roomSections(hass, cfg);
+
+  // Answered once for the page, so the shortcut builder stays synchronous.
+  if (entries.some((entry) => entry.key === "shortcuts" && !entry.section)) {
+    cfg._vacuum_areas = await vacuumAreaMapping(hass, areaCapableVacuums(hass));
+  }
 
   const claimed = new Set();
   const sections = [];
@@ -1953,10 +2025,14 @@ function buildRoomView(config, hass) {
       cards = devices.map((deviceId) =>
         Object.assign(
           { type: `custom:${spec.card}`, device: deviceId },
+          spec.defaults || {},
           entry.card_options || {},
           { grid_options: { columns: entry.tile_columns || "full" } }
         )
       );
+      // The card speaks for the whole appliance, so its entities should not
+      // turn up again as loose tiles further down the page.
+      companionEntities(hass, devices).forEach((id) => claimed.add(id));
       // One appliance names the section after itself; several fall back to the
       // card's own name, so neither needs a translation here.
       if (entry.title === undefined) {
@@ -1973,7 +2049,7 @@ function buildRoomView(config, hass) {
         Object.assign({ grid_options: { columns: entry.button_columns || 3, rows: entry.button_rows || 2 } }, card)
       );
     } else {
-      const result = roomSectionCards(hass, cfg, entry, areas);
+      const result = roomSectionCards(hass, cfg, entry, areas, claimed);
       result.used.forEach((id) => claimed.add(id));
       cards = result.cards;
     }
@@ -2066,11 +2142,11 @@ customElements.define("ll-strategy-view-area-domain-room", AreaDomainRoomStrateg
 // Same page as a dashboard strategy, which is the route that gets a UI editor.
 class AreaDomainRoomDashboardStrategy {
   static async generate(config, hass) {
-    return { views: [buildRoomView(config, hass)] };
+    return { views: [await buildRoomView(config, hass)] };
   }
 
   static async generateDashboard(info) {
-    return { views: [buildRoomView(info.config, info.hass)] };
+    return { views: [await buildRoomView(info.config, info.hass)] };
   }
 
   static async getConfigElement() {

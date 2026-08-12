@@ -88,10 +88,10 @@ views:
 | Section | Contents |
 | --- | --- |
 | Shortcuts | Coloured buttons: turn every light in the room off, send the vacuum to this room, and one per scene assigned to the room |
-| Laundry | A [WashData card][washdata-card] per WashData appliance in the room, when that card is installed |
 | Lights | The covering group full width, then the lamps |
 | Covers | Covers and valves |
 | Climate | Thermostat cards for climate and water heaters |
+| Laundry | A [WashData card][washdata-card] per WashData appliance in the room, when that card is installed |
 | Media | Media players |
 | Sensors | Temperature, humidity and air pressure, as sensor cards with a graph |
 | Security | Alarm panels, locks, and the binary sensors that watch doors, windows, motion, smoke, gas, water and tampering |
@@ -142,9 +142,13 @@ Some rooms deserve a card from another repository. A section can name one, and i
     log: 3          # passed straight to the card
 ```
 
-Right now `washdata` is the one on offer, for [WashData Card][washdata-card]: one card per WashData appliance in the room, full width. Installed is checked against the custom element and the card registry, the device against the entity registry's `platform`. With one appliance the heading is its name; with several it is the card's own name.
+Right now `washdata` is the one on offer, for [WashData Card][washdata-card]: one card per WashData appliance in the room, full width, placed after the thermostats. Installed is checked against the custom element and the card registry, the device against the entity registry's `platform`. With one appliance the heading is its name; with several it is the card's own name.
+
+The card speaks for the whole appliance, so **every entity on that device is taken off the rest of the page**: its maintenance switch does not turn up again under other devices, nor its buttons under the catch-all. The lifetime energy total is switched off here too, since it says little next to a running cycle; `card_options: {show_energy: true}` puts it back.
 
 It sits in the default set already, so a room with a washing machine gets it and every other room does not notice.
+
+More generally, sections are now first-come: an entity an earlier section took does not appear again in a later one.
 
 ### Your own sections
 
@@ -237,6 +241,8 @@ data:
   cleaning_area_id: [living_room]
 ```
 
+A robot can only be sent to a room it has a **segment mapped to**, under *Map vacuum segments to areas* in the vacuum's entity settings. Rooms without one get no button at all: `vacuum.clean_area` would only answer `areas_not_mapped`, and quietly starting a whole-house run instead would be a nasty surprise from a button that says "clean this room". That mapping lives in the entity registry rather than in the state, so it is read once per page through `config/entity_registry/get_entries`. If that lookup cannot be answered the button is left alone rather than hidden on a guess.
+
 With more than one capable robot they all get the call. Pin it to one with `vacuum_entity` on the shortcuts entry:
 
 ```yaml
@@ -245,7 +251,7 @@ With more than one capable robot they all get the call. Pin it to one with `vacu
   buttons: [lights_off, vacuum, scenes]
 ```
 
-If no vacuum supports area cleaning, the button falls back to `vacuum.start` on the vacuums in the room, which is a full run. In that case a custom button pointed at your own script is the better answer.
+If no vacuum in the house supports area cleaning at all, the button falls back to `vacuum.start` on the vacuums in the room, which is a full run. In that case a custom button pointed at your own script is the better answer.
 
 [clean-area]: https://www.home-assistant.io/actions/vacuum.clean_area/
 
