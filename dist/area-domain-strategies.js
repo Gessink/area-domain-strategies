@@ -18,7 +18,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.6.1";
+const VERSION = "1.7.0";
 
 /* ================================================================== *
  * Shared core
@@ -1669,13 +1669,30 @@ function companionEntities(hass, devices) {
   });
 }
 
+// What the counters on a room page count. Deliberately not the section list:
+// doors, windows and motion are worth a number at the top even though they all
+// live in one Security section below.
+// Cards that replace a tile entirely and are given the full section width.
+const FULL_WIDTH_CARDS = ["thermostat", "humidifier", "media-control"];
+
+const DEFAULT_ROOM_BADGES = [
+  { key: "light", domain: "light" },
+  { key: "cover", domains: ["cover", "valve"] },
+  { key: "climate", domains: ["climate", "water_heater"] },
+  { key: "media_player", domain: "media_player" },
+  { key: "door", domain: "binary_sensor", device_class: "door" },
+  { key: "window", domain: "binary_sensor", device_class: "window" },
+  { key: "motion", domain: "binary_sensor", device_class: "motion" },
+  { key: "switch", domain: "switch" },
+];
+
 const DEFAULT_ROOM_SECTIONS = [
   { key: "shortcuts" },
   { key: "light", domain: "light" },
   { key: "cover", domains: ["cover", "valve"] },
   { key: "climate", domains: ["climate", "water_heater"], card: "thermostat" },
   { key: "washdata", companion: "washdata" },
-  { key: "media_player", domain: "media_player" },
+  { key: "media_player", domain: "media_player", card: "media-control" },
   { key: "sensor", domain: "sensor", device_classes: COMMON_SENSOR_CLASSES, card: "sensor" },
   {
     key: "security",
@@ -1912,11 +1929,15 @@ function roomSectionCards(hass, cfg, entry, areas, claimed) {
     return card;
   };
 
-  // A thermostat card says more than a tile with a temperature row, and it is
-  // what a climate section is usually for.
-  if (entry.card === "thermostat" || entry.card === "humidifier") {
+  // Cards that speak for a whole device and want the width to do it: a
+  // thermostat dial, or media controls with artwork and a volume slider.
+  if (FULL_WIDTH_CARDS.includes(entry.card)) {
     headers.concat(items).forEach((id) => {
-      cards.push({ type: entry.card, entity: id, grid_options: { columns: "full" } });
+      cards.push({
+        type: entry.card,
+        entity: id,
+        grid_options: { columns: entry.tile_columns || "full" },
+      });
     });
     return { cards, used };
   }
@@ -2085,15 +2106,21 @@ async function buildRoomView(config, hass) {
   };
 
   if (cfg.badges !== false) {
-    const tabs = entries
-      // Only sections that match on something have a number worth showing.
-      .filter((entry) => !entry.section && !entry.rest && !entry.companion && entry.key !== "shortcuts")
+    // The counters answer "what is going on in here", which is a different
+    // question from how the page is divided up, so they have their own list.
+    // One that the room has nothing of is left out entirely.
+    const wanted = Array.isArray(cfg.badge_chips) && cfg.badge_chips.length
+      ? cfg.badge_chips
+      : DEFAULT_ROOM_BADGES;
+
+    const tabs = wanted
       .map((entry, i) => ({
         slug: chipSlug(chipFromConfig(entry), i),
         name: sectionHeading(hass, entry),
         icon: sectionIcon(hass, entry),
         chip: chipFromConfig(entry),
-      }));
+      }))
+      .filter((tab) => candidates(hass, Object.assign({}, cfg, { areas }), tab.chip).length);
 
     const badge = Object.assign({}, cfg, {
       type: "custom:area-domain-tab-chips",
@@ -2899,6 +2926,7 @@ const ROOM_SECTION_SCHEMA = [
               { value: "tile", label: "Tile cards" },
               { value: "thermostat", label: "Thermostat cards" },
               { value: "humidifier", label: "Humidifier cards" },
+              { value: "media-control", label: "Media player cards" },
             ],
           },
         },

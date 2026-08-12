@@ -92,13 +92,31 @@ views:
 | Covers | Covers and valves |
 | Climate | Thermostat cards for climate and water heaters |
 | Laundry | A [WashData card][washdata-card] per WashData appliance in the room, when that card is installed |
-| Media | Media players |
+| Media | Media players, as media control cards |
 | Sensors | Temperature, humidity and air pressure, as sensor cards with a graph |
 | Security | Alarm panels, locks, and the binary sensors that watch doors, windows, motion, smoke, gas, water and tampering |
 | Other devices | Switches, fans, vacuums, mowers, sirens, humidifiers, remotes |
 | Other | The catch-all: anything in the room the sections above did not take |
 
 Sections with nothing in them are left out. The counters on top show active of total, so `0/7 aan` tells you there are seven lamps and none are on.
+
+### The counters
+
+They are their own list rather than one per section, because what you want a number for is not the same as how the page is divided up: doors, windows and motion each earn a counter even though all three live in the Security section below.
+
+| Lights | Covers | Climate | Media | Doors | Windows | Motion | Switches |
+
+A counter for something the room has none of is left out entirely, so an ordinary bedroom shows four and not eight. Replace the list with `badge_chips`, which takes the same matchers as a section:
+
+```yaml
+strategy:
+  type: custom:area-domain-room
+  areas: [living_room]
+  badge_chips:
+    - domain: light
+    - domain: binary_sensor
+      device_class: moisture
+```
 
 The catch-all is what keeps this maintainable: buy a device in a domain nobody thought of and it appears by itself instead of quietly going missing. It skips things that are not devices, scenes and scripts and automations and the like, and it also skips `sensor` and `binary_sensor`, because asking for three sensor classes and then getting every other one back under "Other" would defeat the point. Override the list with `exclude_domains` on the catch-all entry.
 
@@ -191,7 +209,7 @@ strategy:
 | `key` | `shortcuts` for the shortcut buttons; otherwise just an identifier used for the badge. |
 | `title` / `icon` | Override the heading. Empty means the translated domain or device class name. |
 | `domain` / `domains`, `device_class`, `label` / `labels`, `entities` | What the section matches, the same keys as everywhere else. |
-| `card` | `tile` (default), `thermostat`, `humidifier` or `sensor` (a graph under the value). |
+| `card` | `tile` (default), `thermostat`, `humidifier`, `media-control` or `sensor` (a graph under the value). The first four take the full section width unless `tile_columns` says otherwise. |
 | `tile_columns` | Card width out of 12 for this section only. |
 | `vertical` | Stack the tile's icon above its name. |
 | `rest` | Make this the catch-all. It always runs last, wherever you put it. |
