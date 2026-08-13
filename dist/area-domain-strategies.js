@@ -8,6 +8,9 @@
  *   custom:area-domain-section   a grid section for one device type across one
  *                                or more areas, groups first
  *
+ *   custom:area-room-section     a room's overview section: a header, then a
+ *                                hand-picked list of entities as tiles
+ *
  *   custom:area-domain-areas     a sections view with one section per area for
  *                                a single device type
  *
@@ -18,7 +21,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.7.0";
+const VERSION = "1.8.0";
 
 /* ================================================================== *
  * Shared core
@@ -460,7 +463,13 @@ const COVER_OPEN = 1;
 const COVER_CLOSE = 2;
 const COVER_SET_POSITION = 4;
 const FAN_SET_SPEED = 1;
+const MEDIA_PAUSE = 1;
 const MEDIA_VOLUME_SET = 4;
+const MEDIA_VOLUME_STEP = 1024;
+const MEDIA_SELECT_SOURCE = 2048;
+const MEDIA_STOP = 4096;
+const MEDIA_PLAY = 16384;
+const MEDIA_SELECT_SOUND_MODE = 65536;
 // VacuumEntityFeature.CLEAN_AREA, added in Home Assistant 2026.3.
 const VACUUM_CLEAN_AREA = 16384;
 
@@ -541,6 +550,23 @@ function featuresFor(stateObj) {
     default:
       break;
   }
+  return out;
+}
+
+// media_player gets the fuller native tile feature set here rather than in
+// featuresFor() itself, so the existing detail-room pages this shares code
+// with keep showing exactly what they always have.
+function roomSectionFeatures(stateObj) {
+  const domain = stateObj.entity_id.split(".")[0];
+  if (domain !== "media_player") return featuresFor(stateObj);
+
+  const supported = (stateObj.attributes && stateObj.attributes.supported_features) || 0;
+  const out = [];
+  if (supported & (MEDIA_PLAY | MEDIA_PAUSE | MEDIA_STOP)) out.push({ type: "media-player-playback" });
+  if (supported & MEDIA_VOLUME_SET) out.push({ type: "media-player-volume-slider" });
+  else if (supported & MEDIA_VOLUME_STEP) out.push({ type: "media-player-volume-buttons" });
+  if (supported & MEDIA_SELECT_SOURCE) out.push({ type: "media-player-source" });
+  if (supported & MEDIA_SELECT_SOUND_MODE) out.push({ type: "media-player-sound-mode" });
   return out;
 }
 
@@ -779,6 +805,92 @@ class AreaDomainSectionStrategy {
 }
 
 customElements.define("ll-strategy-section-area-domain-section", AreaDomainSectionStrategy);
+
+/* ================================================================== *
+ * Room section strategy: custom:area-room-section
+ *
+ * One section for a room's overview card: an area-section-header, then a
+ * hand-picked list of entities. Unlike area-domain-room this never chooses
+ * which entities show up, only how each one is drawn, so the room's own
+ * curation (a light group instead of every bulb, one thermostat, which
+ * media player) stays exactly as configured.
+ * ================================================================== */
+
+// Curated deviations from Home Assistant's own default tile icon. Kept to
+// domains where every existing room in Home.yml already drew the same icon
+// by hand, so nothing here is a guess.
+const ROOM_SECTION_DEFAULT_ICON = {
+  climate: "mdi:radiator",
+};
+
+// A thermostat dial or media player with artwork earns the section's full
+// width; everything else sits several to a row like the plain light tiles
+// always have.
+const ROOM_SECTION_FULL_WIDTH_DOMAINS = ["climate", "media_player", "water_heater", "humidifier"];
+
+const ROOM_SECTION_TILE_KEYS = ["tap_action", "icon_tap_action", "hold_action", "double_tap_action", "vertical", "color"];
+
+function roomSectionEntry(entry) {
+  return typeof entry === "string" ? { entity: entry } : entry || {};
+}
+
+function roomSectionTile(hass, entry, tileColumns) {
+  const opts = roomSectionEntry(entry);
+  const id = opts.entity;
+  const stateObj = id ? hass.states[id] : undefined;
+  if (!stateObj) return null;
+
+  const domain = id.split(".")[0];
+  const card = { type: "tile", entity: id };
+
+  if (opts.name !== undefined) card.name = opts.name;
+  if (opts.icon !== undefined) card.icon = opts.icon;
+  else if (ROOM_SECTION_DEFAULT_ICON[domain]) card.icon = ROOM_SECTION_DEFAULT_ICON[domain];
+
+  const features = Array.isArray(opts.features) ? opts.features : roomSectionFeatures(stateObj);
+  if (features.length) card.features = features;
+
+  if (domain === "media_player" && opts.show_entity_picture !== false) card.show_entity_picture = true;
+
+  ROOM_SECTION_TILE_KEYS.forEach((key) => {
+    if (opts[key] !== undefined) card[key] = opts[key];
+  });
+
+  const inline = opts.inline !== undefined ? opts.inline : !ROOM_SECTION_FULL_WIDTH_DOMAINS.includes(domain);
+  card.grid_options = { columns: inline ? tileColumns : "full" };
+
+  return card;
+}
+
+function buildRoomSection(config, hass) {
+  const cfg = config || {};
+  const cards = [];
+
+  if (cfg.header !== false) {
+    cards.push(Object.assign({ type: "custom:area-section-header", area: cfg.area }, cfg.header || {}));
+  }
+
+  const tileColumns = cfg.tile_columns || 6;
+  asArray(cfg.entities).forEach((entry) => {
+    const card = roomSectionTile(hass, entry, tileColumns);
+    if (card) cards.push(card);
+  });
+
+  return { type: "grid", cards };
+}
+
+class AreaRoomSectionStrategy {
+  static async generate(config, hass) {
+    return buildRoomSection(config, hass);
+  }
+
+  // Older Home Assistant releases call this instead.
+  static async generateSection(info) {
+    return buildRoomSection(info.config, info.hass);
+  }
+}
+
+customElements.define("ll-strategy-section-area-room-section", AreaRoomSectionStrategy);
 
 /* ================================================================== *
  * Areas view strategy: custom:area-domain-areas

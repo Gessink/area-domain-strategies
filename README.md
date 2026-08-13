@@ -332,6 +332,49 @@ views:
 
 Without a `title`, the heading is the translated, pluralised device class or domain name, with the area appended when exactly one area is selected: `Lichten · Woonkamer`.
 
+## Room section
+
+A room's overview card: an [area-section-header](https://github.com/Gessink/area-domain-chips#area-section-header) followed by a hand-picked list of entities, each drawn as a tile with the right controls for its domain.
+
+Unlike the section strategy above, this one never decides *which* entities show up, only how each one is drawn. That is the point: a room overview is usually curated on purpose, one thermostat instead of five radiator valves, a light group instead of every bulb, a specific speaker instead of every media player integration happens to expose, so the entity list stays explicit while the boilerplate (features, icon, tap actions) goes away.
+
+```yaml
+views:
+  - type: sections
+    sections:
+      - strategy:
+          type: custom:area-room-section
+          area: keuken
+          entities:
+            - entity: light.lamp_keuken_plafond
+              name: Plafondlamp
+            - entity: light.lamp_keuken_aanrecht
+              name: Aanrecht
+            - entity: climate.keuken
+              name: Verwarming
+```
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `area` | string / list | – | Passed straight through to the header's `area`. |
+| `entities` | list | `[]` | Entity ids, or objects with the options below. A plain string is the same as `{ entity: "..." }`. |
+| `header` | object / `false` | `{}` | Extra options merged onto the generated `custom:area-section-header` (e.g. `tap_action`). `false` leaves the header out entirely. |
+| `tile_columns` | number | `6` | Grid width for tiles that are not full width. |
+
+Per-entity options:
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `entity` | string | – | Required. |
+| `name` | string | entity's own name | Label override. |
+| `icon` | string | domain default, else Home Assistant's own | `climate` defaults to `mdi:radiator`; every other domain is left to Home Assistant. |
+| `features` | list | auto-detected | Overrides feature detection entirely, same shape as a native tile card's `features`. |
+| `inline` | boolean | `false` for `climate`, `media_player`, `water_heater`, `humidifier`; `true` otherwise | `true` sits several tiles to a row like a plain light; `false` takes the section's full width like a thermostat dial or a media player with artwork. |
+| `show_entity_picture` | boolean | `true` for `media_player` | Set `false` to keep the domain icon instead of album art. |
+| `tap_action` / `icon_tap_action` / `hold_action` / `double_tap_action` / `vertical` / `color` | – | – | Passed straight through to the tile card. |
+
+Feature detection reuses the same rules as every other card in this file (see [Tile card features](#tile-card-features)), with media players getting the fuller native set: `media-player-playback`, a volume slider or buttons depending on what the entity supports, and source/sound-mode selects when available. That is enough to replace a third-party media player card with a native tile in most rooms.
+
 ## How the tabs work
 
 Home Assistant strategies generate their config once and do not re-run on a click, and native `visibility` only takes the conditions Home Assistant knows: `state`, `numeric_state`, `screen`, `user`. There is no URL condition, so hash-driven tabs cannot be expressed in a native `visibility` block. Cards that work this way, Bubble Card for instance, read the hash in their own code.
