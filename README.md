@@ -373,7 +373,7 @@ Per-entity options:
 | `show_entity_picture` | boolean | `true` for `media_player` | Set `false` to keep the domain icon instead of album art. |
 | anything else (`tap_action`, `icon_tap_action`, `state_content`, `features_position`, `vertical`, `color`, ...) | – | – | Any option not listed above is passed straight through to the tile card as-is. |
 
-Feature detection reuses the same rules as every other card in this file (see [Tile card features](#tile-card-features)), with media players getting the fuller native set: `media-player-playback`, a volume slider or buttons depending on what the entity supports, and source/sound-mode selects when available. That is enough to replace a third-party media player card with a native tile in most rooms.
+Feature detection mostly reuses the same rules as every other card in this file (see [Tile card features](#tile-card-features)), with two exceptions: `climate` only ever gets `target-temperature`, never the mode selector, since a room overview wants a quick nudge to the target, not a mode switcher; and media players get the fuller native set instead: `media-player-playback`, a volume slider or buttons depending on what the entity supports, and source/sound-mode selects when available. That is enough to replace a third-party media player card with a native tile in most rooms.
 
 ## How the tabs work
 

@@ -21,7 +21,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.8.1";
+const VERSION = "1.8.3";
 
 /* ================================================================== *
  * Shared core
@@ -553,11 +553,17 @@ function featuresFor(stateObj) {
   return out;
 }
 
-// media_player gets the fuller native tile feature set here rather than in
+// media_player and climate get their own feature set here rather than in
 // featuresFor() itself, so the existing detail-room pages this shares code
 // with keep showing exactly what they always have.
 function roomSectionFeatures(stateObj) {
   const domain = stateObj.entity_id.split(".")[0];
+
+  // A room overview wants a quick way to nudge the target temperature, not
+  // a mode switcher, so this drops the climate-hvac-modes feature that
+  // featuresFor() adds whenever the entity happens to list hvac_modes.
+  if (domain === "climate") return [{ type: "target-temperature" }];
+
   if (domain !== "media_player") return featuresFor(stateObj);
 
   const supported = (stateObj.attributes && stateObj.attributes.supported_features) || 0;
