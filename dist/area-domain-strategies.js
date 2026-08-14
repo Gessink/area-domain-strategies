@@ -21,7 +21,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.8.4";
+const VERSION = "1.9.0";
 
 /* ================================================================== *
  * Shared core
@@ -831,6 +831,19 @@ const MUSHROOM_MEDIA_PLAYER_DEFAULTS = {
   show_volume_level: true,
   icon_type: "entity-picture",
   fill_container: false,
+  // Mushroom filters each of these down to what the entity actually
+  // supports (isVolumeControlVisible() and its media_controls equivalent
+  // both gate on supported_features), so asking for everything and letting
+  // Mushroom decide is the same "derive from capabilities" approach the
+  // rest of this strategy already uses for lights, covers and climate.
+  volume_controls: ["volume_mute", "volume_set", "volume_buttons"],
+  media_controls: ["on_off", "shuffle", "previous", "play_pause_stop", "next", "repeat"],
+  // Every media player in this file used the exact same card_mod to keep an
+  // off/unavailable icon in step with the tile colour theme, so that is a
+  // default now too, still overridable per entity like anything else.
+  card_mod: {
+    style: "ha-state-icon {\n  --icon-color-disabled: rgb(var(--tile-color));\n  }\n",
+  },
 };
 
 function roomSectionEntry(entry) {

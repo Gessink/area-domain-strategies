@@ -374,18 +374,18 @@ Per-entity options:
 
 ### Media players
 
-`media_player` is the one domain that does not become a tile. A native tile spends one full row per feature, so a media player wanting both playback buttons and a volume slider ends up noticeably taller than before; there is no way to fit both into a single compact row the way a purpose-built media player card can. So `media_player` entries render as [`custom:mushroom-media-player-card`](https://github.com/piitaya/lovelace-mushroom) instead, with `use_media_info`, `show_volume_level`, `icon_type: entity-picture` and `fill_container: false` set by default:
+`media_player` is the one domain that does not become a tile. A native tile spends one full row per feature, so a media player wanting both playback buttons and a volume slider ends up noticeably taller than before; there is no way to fit both into a single compact row the way a purpose-built media player card can. So `media_player` entries render as [`custom:mushroom-media-player-card`](https://github.com/piitaya/lovelace-mushroom) instead:
 
 ```yaml
 entities:
   - entity: media_player.living_room_speaker
     name: Speakers
-    volume_controls: [volume_mute, volume_set]
-    media_controls: [shuffle, on_off]
-    card_mod:
-      style: |
-        ha-state-icon { --icon-color-disabled: rgb(var(--tile-color)); }
+  - entity: media_player.bedroom_alarm_clock
+    name: Alarm clock
+    collapsible_controls: false
 ```
+
+By default this asks for every `volume_controls` and `media_controls` value Mushroom knows (`volume_mute`/`volume_set`/`volume_buttons`, `on_off`/`shuffle`/`previous`/`play_pause_stop`/`next`/`repeat`), plus `use_media_info`, `show_volume_level`, `icon_type: entity-picture`, `fill_container: false`, and a `card_mod` that keeps a disabled icon in step with the tile colour theme. Mushroom itself filters both control lists down to whatever the entity's `supported_features` actually allows (`isVolumeControlVisible()` and its media_controls equivalent both gate this), so this is the same "derive from what the entity supports" approach the rest of the strategy already uses for lights, covers and climate, not a fixed guess. Pass a narrower `volume_controls`/`media_controls` to hide a control the entity can do but you don't want shown, and anything Mushroom-specific (`collapsible_controls`, `card_mod`, ...) overrides the default the same way `tap_action` does for a tile.
 
 `volume_controls`, `media_controls`, `collapsible_controls`, `card_mod`, and every other Mushroom option pass straight through the same way `tap_action` does for a tile, since they are not this strategy's business either. This requires the Mushroom cards integration installed via HACS; without it a `media_player` entry shows Home Assistant's "custom element doesn't exist" placeholder instead of a card.
 
