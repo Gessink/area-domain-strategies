@@ -21,7 +21,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.8.0";
+const VERSION = "1.8.1";
 
 /* ================================================================== *
  * Shared core
@@ -828,7 +828,11 @@ const ROOM_SECTION_DEFAULT_ICON = {
 // always have.
 const ROOM_SECTION_FULL_WIDTH_DOMAINS = ["climate", "media_player", "water_heater", "humidifier"];
 
-const ROOM_SECTION_TILE_KEYS = ["tap_action", "icon_tap_action", "hold_action", "double_tap_action", "vertical", "color"];
+// Consumed by the strategy itself. Everything else on an entity entry (
+// tap_action, state_content, features_position, vertical, ...) is not this
+// strategy's business and goes straight through to the tile card, so a
+// tile-card option added after this file was written still works.
+const ROOM_SECTION_OWN_KEYS = ["entity", "name", "icon", "features", "inline", "show_entity_picture"];
 
 function roomSectionEntry(entry) {
   return typeof entry === "string" ? { entity: entry } : entry || {};
@@ -852,8 +856,8 @@ function roomSectionTile(hass, entry, tileColumns) {
 
   if (domain === "media_player" && opts.show_entity_picture !== false) card.show_entity_picture = true;
 
-  ROOM_SECTION_TILE_KEYS.forEach((key) => {
-    if (opts[key] !== undefined) card[key] = opts[key];
+  Object.keys(opts).forEach((key) => {
+    if (!ROOM_SECTION_OWN_KEYS.includes(key)) card[key] = opts[key];
   });
 
   const inline = opts.inline !== undefined ? opts.inline : !ROOM_SECTION_FULL_WIDTH_DOMAINS.includes(domain);

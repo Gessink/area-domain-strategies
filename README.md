@@ -371,7 +371,7 @@ Per-entity options:
 | `features` | list | auto-detected | Overrides feature detection entirely, same shape as a native tile card's `features`. |
 | `inline` | boolean | `false` for `climate`, `media_player`, `water_heater`, `humidifier`; `true` otherwise | `true` sits several tiles to a row like a plain light; `false` takes the section's full width like a thermostat dial or a media player with artwork. |
 | `show_entity_picture` | boolean | `true` for `media_player` | Set `false` to keep the domain icon instead of album art. |
-| `tap_action` / `icon_tap_action` / `hold_action` / `double_tap_action` / `vertical` / `color` | – | – | Passed straight through to the tile card. |
+| anything else (`tap_action`, `icon_tap_action`, `state_content`, `features_position`, `vertical`, `color`, ...) | – | – | Any option not listed above is passed straight through to the tile card as-is. |
 
 Feature detection reuses the same rules as every other card in this file (see [Tile card features](#tile-card-features)), with media players getting the fuller native set: `media-player-playback`, a volume slider or buttons depending on what the entity supports, and source/sound-mode selects when available. That is enough to replace a third-party media player card with a native tile in most rooms.
 
