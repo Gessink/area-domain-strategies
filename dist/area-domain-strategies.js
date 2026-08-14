@@ -21,7 +21,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.9.0";
+const VERSION = "1.9.1";
 
 /* ================================================================== *
  * Shared core
@@ -815,6 +815,12 @@ const ROOM_SECTION_DEFAULT_ICON = {
   climate: "mdi:radiator",
 };
 
+// Same idea for state_content: every climate tile in Home.yml showed the
+// same three lines, so that is the default now instead of repeated config.
+const ROOM_SECTION_DEFAULT_STATE_CONTENT = {
+  climate: ["current_temperature", "state", "hvac_action"],
+};
+
 // Consumed by the strategy itself. Everything else on an entity entry (
 // tap_action, state_content, features_position, vertical, volume_controls,
 // media_controls, collapsible_controls, card_mod, ...) is not this
@@ -888,6 +894,10 @@ function roomSectionTile(hass, entry, tileColumns) {
 
   const features = Array.isArray(opts.features) ? opts.features : roomSectionFeatures(stateObj);
   if (features.length) card.features = features;
+
+  if (opts.state_content === undefined && ROOM_SECTION_DEFAULT_STATE_CONTENT[domain]) {
+    card.state_content = ROOM_SECTION_DEFAULT_STATE_CONTENT[domain];
+  }
 
   roomSectionOverrides(card, opts);
   card.grid_options = gridOptions;

@@ -368,6 +368,7 @@ Per-entity options:
 | `entity` | string | – | Required. |
 | `name` | string | entity's own name | Label override. |
 | `icon` | string | domain default, else Home Assistant's own | `climate` defaults to `mdi:radiator`; every other domain is left to Home Assistant. Not used for `media_player`, see below. |
+| `state_content` | list | domain default, else the tile card's own | `climate` defaults to `[current_temperature, state, hvac_action]`. Every other domain is left to the tile card. |
 | `features` | list | auto-detected | Overrides feature detection entirely, same shape as a native tile card's `features`. Not used for `media_player`, see below. |
 | `inline` | boolean | `true` | Home Assistant's own tile card default, several to a row. Set `false` to give a thermostat dial or a media player with artwork the section's full width instead. |
 | anything else (`tap_action`, `icon_tap_action`, `state_content`, `features_position`, `vertical`, `color`, ...) | – | – | Any option not listed above is passed straight through to the card as-is. |
