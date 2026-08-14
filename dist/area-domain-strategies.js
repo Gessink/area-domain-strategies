@@ -823,11 +823,6 @@ const ROOM_SECTION_DEFAULT_ICON = {
   climate: "mdi:radiator",
 };
 
-// A thermostat dial or media player with artwork earns the section's full
-// width; everything else sits several to a row like the plain light tiles
-// always have.
-const ROOM_SECTION_FULL_WIDTH_DOMAINS = ["climate", "media_player", "water_heater", "humidifier"];
-
 // Consumed by the strategy itself. Everything else on an entity entry (
 // tap_action, state_content, features_position, vertical, ...) is not this
 // strategy's business and goes straight through to the tile card, so a
@@ -860,7 +855,11 @@ function roomSectionTile(hass, entry, tileColumns) {
     if (!ROOM_SECTION_OWN_KEYS.includes(key)) card[key] = opts[key];
   });
 
-  const inline = opts.inline !== undefined ? opts.inline : !ROOM_SECTION_FULL_WIDTH_DOMAINS.includes(domain);
+  // Home Assistant's own tile card default is columns: 6, the same for
+  // every domain, so that is this strategy's default too: inline unless the
+  // room's own author asks for a thermostat dial or media player to take the
+  // section's full width instead.
+  const inline = opts.inline !== false;
   card.grid_options = { columns: inline ? tileColumns : "full" };
 
   return card;
