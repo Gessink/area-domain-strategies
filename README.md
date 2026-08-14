@@ -367,13 +367,29 @@ Per-entity options:
 | --- | --- | --- | --- |
 | `entity` | string | – | Required. |
 | `name` | string | entity's own name | Label override. |
-| `icon` | string | domain default, else Home Assistant's own | `climate` defaults to `mdi:radiator`; every other domain is left to Home Assistant. |
-| `features` | list | auto-detected | Overrides feature detection entirely, same shape as a native tile card's `features`. |
+| `icon` | string | domain default, else Home Assistant's own | `climate` defaults to `mdi:radiator`; every other domain is left to Home Assistant. Not used for `media_player`, see below. |
+| `features` | list | auto-detected | Overrides feature detection entirely, same shape as a native tile card's `features`. Not used for `media_player`, see below. |
 | `inline` | boolean | `true` | Home Assistant's own tile card default, several to a row. Set `false` to give a thermostat dial or a media player with artwork the section's full width instead. |
-| `show_entity_picture` | boolean | `true` for `media_player` | Set `false` to keep the domain icon instead of album art. |
-| anything else (`tap_action`, `icon_tap_action`, `state_content`, `features_position`, `vertical`, `color`, ...) | – | – | Any option not listed above is passed straight through to the tile card as-is. |
+| anything else (`tap_action`, `icon_tap_action`, `state_content`, `features_position`, `vertical`, `color`, ...) | – | – | Any option not listed above is passed straight through to the card as-is. |
 
-Feature detection mostly reuses the same rules as every other card in this file (see [Tile card features](#tile-card-features)), with two exceptions: `climate` only ever gets `target-temperature`, never the mode selector, since a room overview wants a quick nudge to the target, not a mode switcher; and media players get the fuller native set instead: `media-player-playback`, a volume slider or buttons depending on what the entity supports, and source/sound-mode selects when available. That is enough to replace a third-party media player card with a native tile in most rooms.
+### Media players
+
+`media_player` is the one domain that does not become a tile. A native tile spends one full row per feature, so a media player wanting both playback buttons and a volume slider ends up noticeably taller than before; there is no way to fit both into a single compact row the way a purpose-built media player card can. So `media_player` entries render as [`custom:mushroom-media-player-card`](https://github.com/piitaya/lovelace-mushroom) instead, with `use_media_info`, `show_volume_level`, `icon_type: entity-picture` and `fill_container: false` set by default:
+
+```yaml
+entities:
+  - entity: media_player.living_room_speaker
+    name: Speakers
+    volume_controls: [volume_mute, volume_set]
+    media_controls: [shuffle, on_off]
+    card_mod:
+      style: |
+        ha-state-icon { --icon-color-disabled: rgb(var(--tile-color)); }
+```
+
+`volume_controls`, `media_controls`, `collapsible_controls`, `card_mod`, and every other Mushroom option pass straight through the same way `tap_action` does for a tile, since they are not this strategy's business either. This requires the Mushroom cards integration installed via HACS; without it a `media_player` entry shows Home Assistant's "custom element doesn't exist" placeholder instead of a card.
+
+Feature detection reuses the same rules as every other card in this file (see [Tile card features](#tile-card-features)), except `climate` only ever gets `target-temperature`, never the mode selector, since a room overview wants a quick nudge to the target, not a mode switcher. `media_player` does not go through feature detection at all, see below.
 
 ## How the tabs work
 

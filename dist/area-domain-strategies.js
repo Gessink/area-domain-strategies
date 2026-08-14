@@ -21,7 +21,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.8.3";
+const VERSION = "1.8.4";
 
 /* ================================================================== *
  * Shared core
@@ -463,13 +463,7 @@ const COVER_OPEN = 1;
 const COVER_CLOSE = 2;
 const COVER_SET_POSITION = 4;
 const FAN_SET_SPEED = 1;
-const MEDIA_PAUSE = 1;
 const MEDIA_VOLUME_SET = 4;
-const MEDIA_VOLUME_STEP = 1024;
-const MEDIA_SELECT_SOURCE = 2048;
-const MEDIA_STOP = 4096;
-const MEDIA_PLAY = 16384;
-const MEDIA_SELECT_SOUND_MODE = 65536;
 // VacuumEntityFeature.CLEAN_AREA, added in Home Assistant 2026.3.
 const VACUUM_CLEAN_AREA = 16384;
 
@@ -553,9 +547,10 @@ function featuresFor(stateObj) {
   return out;
 }
 
-// media_player and climate get their own feature set here rather than in
-// featuresFor() itself, so the existing detail-room pages this shares code
-// with keep showing exactly what they always have.
+// climate gets its own feature set here rather than in featuresFor()
+// itself, so the existing detail-room pages this shares code with keep
+// showing exactly what they always have. media_player never reaches this:
+// it renders as a Mushroom card instead of a tile (see roomSectionTile).
 function roomSectionFeatures(stateObj) {
   const domain = stateObj.entity_id.split(".")[0];
 
@@ -564,16 +559,7 @@ function roomSectionFeatures(stateObj) {
   // featuresFor() adds whenever the entity happens to list hvac_modes.
   if (domain === "climate") return [{ type: "target-temperature" }];
 
-  if (domain !== "media_player") return featuresFor(stateObj);
-
-  const supported = (stateObj.attributes && stateObj.attributes.supported_features) || 0;
-  const out = [];
-  if (supported & (MEDIA_PLAY | MEDIA_PAUSE | MEDIA_STOP)) out.push({ type: "media-player-playback" });
-  if (supported & MEDIA_VOLUME_SET) out.push({ type: "media-player-volume-slider" });
-  else if (supported & MEDIA_VOLUME_STEP) out.push({ type: "media-player-volume-buttons" });
-  if (supported & MEDIA_SELECT_SOURCE) out.push({ type: "media-player-source" });
-  if (supported & MEDIA_SELECT_SOUND_MODE) out.push({ type: "media-player-sound-mode" });
-  return out;
+  return featuresFor(stateObj);
 }
 
 function tileCard(hass, entityId, withFeatures) {
@@ -830,13 +816,32 @@ const ROOM_SECTION_DEFAULT_ICON = {
 };
 
 // Consumed by the strategy itself. Everything else on an entity entry (
-// tap_action, state_content, features_position, vertical, ...) is not this
-// strategy's business and goes straight through to the tile card, so a
-// tile-card option added after this file was written still works.
-const ROOM_SECTION_OWN_KEYS = ["entity", "name", "icon", "features", "inline", "show_entity_picture"];
+// tap_action, state_content, features_position, vertical, volume_controls,
+// media_controls, collapsible_controls, card_mod, ...) is not this
+// strategy's business and goes straight through to the card, so an option
+// added to either card kind after this file was written still works.
+const ROOM_SECTION_OWN_KEYS = ["entity", "name", "icon", "features", "inline"];
+
+// A native tile spends one full row per feature, so a media player wanting
+// both playback buttons and a volume control ends up noticeably taller than
+// the compact, single-row control strip Mushroom draws for the same thing.
+// Requires the Mushroom cards integration (HACS: lovelace-mushroom).
+const MUSHROOM_MEDIA_PLAYER_DEFAULTS = {
+  use_media_info: true,
+  show_volume_level: true,
+  icon_type: "entity-picture",
+  fill_container: false,
+};
 
 function roomSectionEntry(entry) {
   return typeof entry === "string" ? { entity: entry } : entry || {};
+}
+
+function roomSectionOverrides(card, opts) {
+  Object.keys(opts).forEach((key) => {
+    if (!ROOM_SECTION_OWN_KEYS.includes(key)) card[key] = opts[key];
+  });
+  return card;
 }
 
 function roomSectionTile(hass, entry, tileColumns) {
@@ -846,6 +851,22 @@ function roomSectionTile(hass, entry, tileColumns) {
   if (!stateObj) return null;
 
   const domain = id.split(".")[0];
+
+  // Home Assistant's own tile card default is columns: 6, and Mushroom's
+  // own base card defaults to the same, so that is this strategy's default
+  // too: inline unless the room's own author asks for a thermostat dial or
+  // media player to take the section's full width instead.
+  const inline = opts.inline !== false;
+  const gridOptions = { columns: inline ? tileColumns : "full" };
+
+  if (domain === "media_player") {
+    const card = Object.assign({ type: "custom:mushroom-media-player-card", entity: id }, MUSHROOM_MEDIA_PLAYER_DEFAULTS);
+    if (opts.name !== undefined) card.name = opts.name;
+    roomSectionOverrides(card, opts);
+    card.grid_options = gridOptions;
+    return card;
+  }
+
   const card = { type: "tile", entity: id };
 
   if (opts.name !== undefined) card.name = opts.name;
@@ -855,18 +876,8 @@ function roomSectionTile(hass, entry, tileColumns) {
   const features = Array.isArray(opts.features) ? opts.features : roomSectionFeatures(stateObj);
   if (features.length) card.features = features;
 
-  if (domain === "media_player" && opts.show_entity_picture !== false) card.show_entity_picture = true;
-
-  Object.keys(opts).forEach((key) => {
-    if (!ROOM_SECTION_OWN_KEYS.includes(key)) card[key] = opts[key];
-  });
-
-  // Home Assistant's own tile card default is columns: 6, the same for
-  // every domain, so that is this strategy's default too: inline unless the
-  // room's own author asks for a thermostat dial or media player to take the
-  // section's full width instead.
-  const inline = opts.inline !== false;
-  card.grid_options = { columns: inline ? tileColumns : "full" };
+  roomSectionOverrides(card, opts);
+  card.grid_options = gridOptions;
 
   return card;
 }
