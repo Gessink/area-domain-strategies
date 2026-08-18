@@ -11,7 +11,7 @@ Everything they produce is a **native sections view**, so Home Assistant does th
 - **`custom:area-domain-tabs`** generates one sections view with a chip per device type on top. Clicking a chip swaps what every section shows, through the URL hash.
 - **`custom:area-domain-room`** generates a page for one room, or a combined set of rooms, with a section per kind of device: shortcuts, lights, covers, climate, media, other devices, sensors, and a catch-all that picks up whatever is left.
 
-All three have a visual editor.
+All of them have a visual editor.
 
 ## Installation
 
@@ -372,6 +372,10 @@ Per-entity options:
 | `features` | list | auto-detected | Overrides feature detection entirely, same shape as a native tile card's `features`. Not used for `media_player`, see below. |
 | `inline` | boolean | `true` | Home Assistant's own tile card default, several to a row. Set `false` to give a thermostat dial or a media player with artwork the section's full width instead. |
 | anything else (`tap_action`, `icon_tap_action`, `state_content`, `features_position`, `vertical`, `color`, ...) | – | – | Any option not listed above is passed straight through to the card as-is. |
+
+### Editing it in the UI
+
+`custom:area-room-section` has a visual editor, so a room can be put together without touching YAML: pick the areas, decide whether the header shows and where tapping it goes, then add a row per entity with its name, icon and whether it shares a row. Options the strategy passes through to the card, `state_content` or `features_position` say, are left alone by the editor rather than dropped, so a row hand-written in YAML survives being opened in the UI.
 
 ### Media players
 

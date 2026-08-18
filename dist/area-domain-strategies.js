@@ -21,7 +21,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.10.0";
+const VERSION = "1.11.0";
 
 /* ================================================================== *
  * Shared core
@@ -938,6 +938,10 @@ class AreaRoomSectionStrategy {
   // Older Home Assistant releases call this instead.
   static async generateSection(info) {
     return buildRoomSection(info.config, info.hass);
+  }
+
+  static async getConfigElement() {
+    return document.createElement("area-room-section-editor");
   }
 }
 
@@ -2534,6 +2538,12 @@ const CHIP_SCHEMA = [
 ];
 
 const LABELS = {
+  entities: "Entities",
+  inline: "Side by side (off = full width)",
+  tile_columns: "Card width out of 12",
+  show_header: "Show a header",
+  heading: "Heading (empty = the area's own name)",
+  navigation_path: "Tap the header to go to",
   areas: "Areas (empty = every area)",
   domain: "Domain",
   device_class: "Device class (door, window, motion, ...)",
@@ -3267,6 +3277,128 @@ window.customBadges.push({
   preview: false,
   documentationURL: "https://github.com/Gessink/area-domain-strategies",
 });
+
+/* -------------------- room section strategy editor -------------------- */
+
+// One row per entity. Everything the strategy derives itself is left out:
+// what is worth setting by hand is which entity, what to call it, and
+// whether it shares its row.
+const ROOM_SECTION_ENTITY_SCHEMA = [
+  { name: "entity", selector: { entity: {} } },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "name", selector: { text: {} } },
+      { name: "icon", selector: { icon: {} } },
+    ],
+  },
+  { name: "inline", selector: { boolean: {} } },
+];
+
+const ROOM_SECTION_STRATEGY_SCHEMA = [
+  { name: "area", selector: { area: { multiple: true } } },
+  { name: "show_header", selector: { boolean: {} } },
+  {
+    name: "",
+    type: "grid",
+    schema: [
+      { name: "heading", selector: { text: {} } },
+      { name: "navigation_path", selector: { text: {} } },
+    ],
+  },
+  { name: "tile_columns", selector: { number: { min: 1, max: 12, mode: "box" } } },
+];
+
+class AreaRoomSectionEditor extends BaseEditor {
+  _prepare() {
+    const cfg = this._config;
+    if (!Array.isArray(cfg.entities)) cfg.entities = [];
+    // A string entry is shorthand for an entity with no options; the editor
+    // works in objects so every row has somewhere to put a name.
+    cfg.entities = cfg.entities.map((e) => (typeof e === "string" ? { entity: e } : e));
+    this._open = this._open || [];
+    this._open.length = cfg.entities.length;
+  }
+
+  _render() {
+    const root = this._startRender();
+    const cfg = this._config;
+    const header = cfg.header && typeof cfg.header === "object" ? cfg.header : {};
+
+    root.appendChild(
+      this._makeForm(
+        {
+          area: asArray(cfg.area),
+          show_header: cfg.header !== false,
+          heading: typeof header.heading === "string" ? header.heading : "",
+          navigation_path: (header.tap_action || {}).navigation_path || "",
+          tile_columns: cfg.tile_columns || 6,
+        },
+        ROOM_SECTION_STRATEGY_SCHEMA,
+        (value) => {
+          const areas = asArray(value.area);
+          if (areas.length) cfg.area = areas;
+          else delete cfg.area;
+
+          if (value.show_header === false) {
+            cfg.header = false;
+          } else {
+            const next = {};
+            if (value.heading) next.heading = value.heading;
+            if (value.navigation_path) {
+              next.tap_action = { action: "navigate", navigation_path: value.navigation_path };
+            }
+            if (Object.keys(next).length) cfg.header = next;
+            else delete cfg.header;
+          }
+
+          if (value.tile_columns && value.tile_columns !== 6) cfg.tile_columns = value.tile_columns;
+          else delete cfg.tile_columns;
+
+          this._emit();
+        }
+      )
+    );
+
+    this._heading(root, "Entities", "Features, icon and state are worked out per domain. Anything set here wins.");
+
+    this._panelList(root, {
+      items: cfg.entities,
+      open: this._open,
+      schema: ROOM_SECTION_ENTITY_SCHEMA,
+      title: (item) => item.name || item.entity || "New entity",
+      data: (item) => ({
+        entity: item.entity || "",
+        name: item.name || "",
+        icon: item.icon || "",
+        inline: item.inline !== false,
+      }),
+      apply: (value, item) => {
+        // Keep every option this row already had: the strategy passes
+        // anything it does not own straight through to the card, and the
+        // editor must not be the thing that loses it.
+        const next = Object.assign({}, item);
+        next.entity = value.entity || "";
+        if (value.name) next.name = value.name; else delete next.name;
+        if (value.icon) next.icon = value.icon; else delete next.icon;
+        if (value.inline === false) next.inline = false; else delete next.inline;
+        return next;
+      },
+    });
+
+    root.appendChild(
+      this._button("Add entity", () => {
+        cfg.entities.push({ entity: "" });
+        this._open.push(true);
+        this._emit();
+        this._render();
+      })
+    );
+  }
+}
+
+customElements.define("area-room-section-editor", AreaRoomSectionEditor);
 
 console.info(
   `%c AREA-DOMAIN-STRATEGIES %c v${VERSION} `,
