@@ -356,7 +356,7 @@ views:
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `area` | string / list | – | Passed straight through to the header's `area`. |
+| `area` | string / list | – | Passed straight through to the header's `area`. Leave it out and the header becomes a plain `heading` card instead, for a section of hand-picked entities that is not a room. |
 | `entities` | list | `[]` | Entity ids, or objects with the options below. A plain string is the same as `{ entity: "..." }`. |
 | `header` | object / `false` | `{}` | Extra options merged onto the generated `custom:area-section-header` (e.g. `tap_action`). `false` leaves the header out entirely. |
 | `tile_columns` | number | `6` | Grid width for tiles that are not full width. |

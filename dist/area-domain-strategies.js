@@ -21,7 +21,7 @@
  * https://github.com/Gessink/area-domain-strategies
  */
 
-const VERSION = "1.9.1";
+const VERSION = "1.10.0";
 
 /* ================================================================== *
  * Shared core
@@ -910,7 +910,15 @@ function buildRoomSection(config, hass) {
   const cards = [];
 
   if (cfg.header !== false) {
-    cards.push(Object.assign({ type: "custom:area-section-header", area: cfg.area }, cfg.header || {}));
+    // An area-section-header needs an area to name and count. Without one
+    // this is a section of hand-picked entities that happens not to be a
+    // room, say every speaker in the house, so it gets a plain heading and
+    // the entity list still gets the same per-domain treatment.
+    cards.push(
+      asArray(cfg.area).length
+        ? Object.assign({ type: "custom:area-section-header", area: cfg.area }, cfg.header || {})
+        : Object.assign({ type: "heading", heading_style: "title" }, cfg.header || {})
+    );
   }
 
   const tileColumns = cfg.tile_columns || 6;
