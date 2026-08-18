@@ -11,7 +11,8 @@ Everything they produce is a **native sections view**, so Home Assistant does th
 - **`custom:area-domain-tabs`** generates one sections view with a chip per device type on top. Clicking a chip swaps what every section shows, through the URL hash.
 - **`custom:area-domain-room`** generates a page for one room, or a combined set of rooms, with a section per kind of device: shortcuts, lights, covers, climate, media, other devices, sensors, and a catch-all that picks up whatever is left.
 
-All of them have a visual editor.
+Editors: Home Assistant only wires up a strategy's `getConfigElement` for **dashboard** strategies. View and section strategies are configured in YAML, whatever they ship, because the frontend has no editor element for them yet: the section dialog edits width, background, theme and visibility, and nothing about the strategy. `area-domain-tabs` and `area-domain-room` are usable as dashboard strategies, and that is where their editors show up.
+
 
 ## Installation
 
@@ -375,7 +376,9 @@ Per-entity options:
 
 ### Editing it in the UI
 
-`custom:area-room-section` has a visual editor, so a room can be put together without touching YAML: pick the areas, decide whether the header shows and where tapping it goes, then add a row per entity with its name, icon and whether it shares a row. Options the strategy passes through to the card, `state_content` or `features_position` say, are left alone by the editor rather than dropped, so a row hand-written in YAML survives being opened in the UI.
+`custom:area-room-section` ships an editor: areas, whether the header shows and where tapping it goes, and a row per entity with its name, icon and whether it shares a row. Options it does not show, `state_content` or `features_position` say, are carried through untouched rather than dropped.
+
+It is not reachable today. Home Assistant calls `getConfigElement` on dashboard strategies only, so a section strategy is configured in YAML no matter what it offers. The editor is here for when that changes.
 
 ### Media players
 
