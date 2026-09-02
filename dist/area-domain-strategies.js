@@ -2088,6 +2088,29 @@ function shortcutCards(hass, cfg, entry, areas) {
 
 /* -------------------- sections -------------------- */
 
+/* Entities added to a generated section by hand.
+ *
+ * The matchers describe what a section is about, and something can belong
+ * there without fitting that description. A template sensor that reads two
+ * window contacts is not a binary_sensor with a window device class, but it
+ * says whether the window is open all the same.
+ *
+ * Written as a map from section key to entity ids, so the default sections
+ * stay exactly as they are:
+ *
+ *   extra_entities:
+ *     security: [sensor.bedroom_window_position]
+ *
+ * On a section of your own the list can also sit on the entry itself.
+ */
+function extraEntities(cfg, entry) {
+  const own = asArray(entry.extra_entities);
+  const key = sectionKey(entry);
+  const map = cfg.extra_entities;
+  const shared = map && !Array.isArray(map) && key ? asArray(map[key]) : [];
+  return own.concat(shared);
+}
+
 function roomSectionCards(hass, cfg, entry, areas, claimed) {
   const chip = chipFromConfig(entry);
   const scoped = Object.assign({}, cfg, entry, { areas, chip });
@@ -2097,7 +2120,13 @@ function roomSectionCards(hass, cfg, entry, areas, claimed) {
   // companion card covers whole, does not appear a second time.
   const free = (id) => !claimed || !claimed.has(id);
   const headers = found.headers.filter(free);
-  const items = found.items.filter(free);
+
+  // Named by hand, so no matcher had to agree, but the rule above still holds
+  // and an entity a section already listed is not repeated.
+  const listed = new Set(found.headers.concat(found.items));
+  const added = extraEntities(cfg, entry)
+    .filter((id) => hass.states[id] && free(id) && !listed.has(id));
+  const items = found.items.filter(free).concat(added);
 
   const tileColumns = entry.tile_columns || cfg.tile_columns || 6;
   const cards = [];
@@ -2311,6 +2340,7 @@ async function buildRoomView(config, hass) {
     });
     delete badge.sections;
     delete badge.extra_cards;
+    delete badge.extra_entities;
     view.badges = [badge];
   }
 

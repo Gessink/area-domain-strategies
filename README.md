@@ -170,6 +170,26 @@ It sits in the default set already, so a room with a washing machine gets it and
 
 More generally, sections are now first-come: an entity an earlier section took does not appear again in a later one.
 
+### Adding an entity to a section
+
+The matchers describe what a section is about, and something can belong there
+without fitting that description. `extra_entities` names those by hand, per
+section, and leaves the rest of the page alone:
+
+```yaml
+strategy:
+  type: custom:area-domain-room
+  areas: [bedroom]
+  extra_entities:
+    security:
+      - sensor.bedroom_window_position
+```
+
+The key is the section's: `shortcuts`, `light`, `cover`, `climate`, `washdata`,
+`media_player`, `sensor`, `security`, `other` or `rest`. An entity a section
+already found is not listed twice, and one that an earlier section took stays
+where it was.
+
 ### Your own sections
 
 `sections` replaces the default list. Each entry is either a generated section or one of your own, and they keep the order you write them in:
@@ -215,6 +235,7 @@ strategy:
 | `tile_columns` | Card width out of 12 for this section only. |
 | `vertical` | Stack the tile's icon above its name. |
 | `rest` | Make this the catch-all. It always runs last, wherever you put it. |
+| `extra_entities` | Entity ids added to this section without a matcher. |
 | `buttons` | Shortcuts only. Strings `lights_off`, `vacuum`, `scenes`, or an object with `name`, `icon`, `color` and `tap_action` / `service` / `entity`. |
 
 ### The shortcut buttons
