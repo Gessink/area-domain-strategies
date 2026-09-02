@@ -58,6 +58,7 @@ The view is a plain Home Assistant sections view: `max_columns`, the responsive 
 | `groups` / `groups_first` | | | See [Groups](#groups). |
 | `mode` | `all` \| `active` \| `inactive` \| `unavailable` | `all` | Which entities the sections list. |
 | `exclude_*` / `include_*` | | | See the section options below. |
+| `extra_cards` | list | `[]` | Cards of your own on the page. See [Your own cards](#your-own-cards). |
 
 ### Combining areas
 
@@ -288,6 +289,39 @@ views:
 ```
 
 Takes the same options as a section, plus `columns` for `max_columns`.
+
+## Your own cards
+
+A strategy builds the whole view, so there is no place left in the YAML to put
+a card of your own next to it. `extra_cards` is that place: the cards land in a
+section of their own at the end of the view. All three view strategies take it.
+
+The reason it exists is a navigation bar. Such a bar is fixed to the screen, so
+its section stays empty and the page keeps the same layout it had:
+
+```yaml
+views:
+  - strategy:
+      type: custom:area-domain-room
+      areas: [living_room]
+      extra_cards:
+        - type: custom:navbar-card
+          routes: ...
+```
+
+In a YAML dashboard one anchor is enough to give every page the same bar:
+
+```yaml
+navbar: &navbar
+  type: custom:navbar-card
+  routes: ...
+
+views:
+  - strategy:
+      type: custom:area-domain-room
+      areas: [living_room]
+      extra_cards: [*navbar]
+```
 
 ## Section strategy
 

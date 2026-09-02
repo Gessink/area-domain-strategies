@@ -970,13 +970,26 @@ function areaSections(config, hass, chip) {
     .filter((section) => section.cards.length || cfg.hide_empty_areas === false);
 }
 
+/* Extra cards from the configuration, as a section of their own at the end of
+ * the view. A strategy generates the whole view, so there is otherwise no
+ * place left in the YAML to hang a card of your own on the page.
+ *
+ * A navigation bar is what this was written for. Such a bar is fixed to the
+ * screen, so its section stays empty and takes up no room in the grid.
+ */
+function extraSections(cfg) {
+  const cards = cfg.extra_cards;
+  if (!Array.isArray(cards) || !cards.length) return [];
+  return [{ type: "grid", cards }];
+}
+
 function buildAreasView(config, hass) {
   const cfg = Object.assign({ columns: 3 }, config || {});
   const chip = cfg.chip || chipFromConfig(cfg);
   return {
     type: "sections",
     max_columns: cfg.columns,
-    sections: areaSections(cfg, hass, chip),
+    sections: areaSections(cfg, hass, chip).concat(extraSections(cfg)),
   };
 }
 
@@ -1075,12 +1088,13 @@ function buildTabsView(config, hass) {
     tabs: tabs.map((t) => ({ slug: t.slug, name: t.name, icon: t.icon, chip: t.chip })),
   });
   delete badge.chips;
+  delete badge.extra_cards;
 
   return {
     type: "sections",
     max_columns: cfg.columns,
     badges: [badge],
-    sections,
+    sections: sections.concat(extraSections(cfg)),
   };
 }
 
@@ -2269,7 +2283,7 @@ async function buildRoomView(config, hass) {
   const view = {
     type: "sections",
     max_columns: cfg.columns,
-    sections,
+    sections: sections.concat(extraSections(cfg)),
   };
 
   if (cfg.badges !== false) {
@@ -2296,6 +2310,7 @@ async function buildRoomView(config, hass) {
       show_total: cfg.show_total !== false,
     });
     delete badge.sections;
+    delete badge.extra_cards;
     view.badges = [badge];
   }
 
