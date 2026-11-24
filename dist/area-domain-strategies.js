@@ -431,7 +431,7 @@ function friendlyName(hass, entityId) {
 function cardRows(hass, entityId, withFeatures) {
   if (withFeatures === false) return 0;
   const stateObj = hass.states[entityId];
-  return stateObj ? featuresFor(stateObj).length : 0;
+  return stateObj ? featuresFor(stateObj, hass).length : 0;
 }
 
 function sortEntities(hass, ids, cfg) {
@@ -468,6 +468,17 @@ const MEDIA_VOLUME_SET = 4;
 const VACUUM_CLEAN_AREA = 16384;
 
 const BRIGHTNESS_MODES = ["brightness", "color_temp", "hs", "xy", "rgb", "rgbw", "rgbww", "white"];
+const COLOR_MODES = ["hs", "xy", "rgb", "rgbw", "rgbww"];
+
+// The light-color tile feature, a hue strip with a saturation slider, arrived
+// in Home Assistant 2026.11. An older frontend renders an unknown feature as
+// an error inside the tile, so it is only added from that version on.
+function supportsLightColorFeature(hass) {
+  const parts = String((hass && hass.config && hass.config.version) || "").split(".");
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10);
+  return year > 2026 || (year === 2026 && month >= 11);
+}
 
 /* ------------------------------------------------------------------ *
  * Colours
@@ -490,7 +501,9 @@ function resolveColor(color) {
 }
 
 // Relevant controls per domain, derived from what the entity actually supports.
-function featuresFor(stateObj) {
+// hass is optional. Without it a light gets no colour feature, which is what
+// the compact room overview sections want; the full tiles pass it along.
+function featuresFor(stateObj, hass) {
   const domain = stateObj.entity_id.split(".")[0];
   const attrs = stateObj.attributes || {};
   const supported = attrs.supported_features || 0;
@@ -501,6 +514,9 @@ function featuresFor(stateObj) {
       const modes = attrs.supported_color_modes || [];
       if (modes.some((m) => BRIGHTNESS_MODES.includes(m))) out.push({ type: "light-brightness" });
       if (modes.includes("color_temp")) out.push({ type: "light-color-temp" });
+      if (hass && modes.some((m) => COLOR_MODES.includes(m)) && supportsLightColorFeature(hass)) {
+        out.push({ type: "light-color" });
+      }
       break;
     }
     case "cover":
@@ -567,7 +583,7 @@ function tileCard(hass, entityId, withFeatures) {
   if (withFeatures === false) return card;
   const stateObj = hass.states[entityId];
   if (!stateObj) return card;
-  const features = featuresFor(stateObj);
+  const features = featuresFor(stateObj, hass);
   if (features.length) card.features = features;
   return card;
 }

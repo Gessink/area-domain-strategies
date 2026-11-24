@@ -54,7 +54,7 @@ The view is a plain Home Assistant sections view: `max_columns`, the responsive 
 | `sort_by_height` | boolean | `true` | Keep equally tall cards together. See [Card order](#card-order). |
 | `hide_empty_areas` | boolean | `true` | Skip areas with no matching devices at all. |
 | `show_counts` | boolean | `true` | Show how many are active under each chip. |
-| `features` | boolean | `true` | Give tile cards their domain controls. |
+| `features` | boolean | `true` | Give tile cards their domain controls. A light that can take a colour also gets the hue strip (`light-color`) on Home Assistant 2026.11 and later; older versions don't know that feature, so it is left out there. |
 | `groups` / `groups_first` | | | See [Groups](#groups). |
 | `mode` | `all` \| `active` \| `inactive` \| `unavailable` | `all` | Which entities the sections list. |
 | `exclude_*` / `include_*` | | | See the section options below. |
