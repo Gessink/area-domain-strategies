@@ -175,6 +175,23 @@ function tr(hass, key) {
   }
 }
 
+// Service names are a translation category of their own, which the frontend
+// only fetches once something asks for it (the action editor, the developer
+// tools). On a freshly opened dashboard nothing has, so hass.localize knows
+// none of them. loadBackendTranslation fetches the category and hands back a
+// localize that does; the hass object we were given keeps the old one.
+async function serviceName(hass, domain, service) {
+  const key = `component.${domain}.services.${service}.name`;
+  const known = tr(hass, key);
+  if (known || !hass || !hass.loadBackendTranslation) return known;
+  try {
+    const localize = await hass.loadBackendTranslation("services", domain);
+    return (localize && localize(key)) || "";
+  } catch (err) {
+    return "";
+  }
+}
+
 function domainName(hass, domain) {
   return (
     tr(hass, `component.${domain}.entity_component._.name`) ||
@@ -266,7 +283,15 @@ function chipName(hass, chip, plural) {
   let name;
   if (deviceClass) name = deviceClassName(hass, domain || "sensor", deviceClass);
   else if (domain) name = domainName(hass, domain);
-  else return tr(hass, "ui.panel.config.entities.caption") || "Entities";
+  // The settings caption is only loaded once the settings panel has been
+  // opened; the target picker's word ships with every page.
+  else {
+    return (
+      tr(hass, "ui.components.target-picker.type.entities") ||
+      tr(hass, "ui.panel.config.entities.caption") ||
+      "Entities"
+    );
+  }
   return plural === false ? name : pluralize(hass, name);
 }
 
@@ -2057,7 +2082,7 @@ function shortcutCards(hass, cfg, entry, areas) {
       }
 
       if (capable.length) {
-        const name = tr(hass, "component.vacuum.services.clean_area.name") || "Clean area";
+        const name = cfg._clean_area_name || tr(hass, "component.vacuum.services.clean_area.name") || "Clean area";
         cards.push(
           serviceButton(
             name,
@@ -2234,7 +2259,11 @@ async function buildRoomView(config, hass) {
 
   // Answered once for the page, so the shortcut builder stays synchronous.
   if (entries.some((entry) => entry.key === "shortcuts" && !entry.section)) {
-    cfg._vacuum_areas = await vacuumAreaMapping(hass, areaCapableVacuums(hass));
+    const areaCapable = areaCapableVacuums(hass);
+    cfg._vacuum_areas = await vacuumAreaMapping(hass, areaCapable);
+    if (areaCapable.length || entries.some((entry) => entry.vacuum_entity)) {
+      cfg._clean_area_name = await serviceName(hass, "vacuum", "clean_area");
+    }
   }
 
   const claimed = new Set();
